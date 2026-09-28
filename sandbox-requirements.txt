@@ -1,0 +1,3 @@
+# Official Bytecode Alliance runtime; Apache-2.0 WITH LLVM-exception.
+# Keep this isolated in .venv-sandbox; no global Python installation required.
+wasmtime==49.0.0

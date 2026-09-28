@@ -1,0 +1,8 @@
+/* Only the reset is shared. Legacy theme selectors must not override the bank
+   form controls (especially the dark, high-contrast sandbox code editor). */
+@tailwind base;
+
+body {
+  margin: 0;
+  background: #f7f7f2;
+}

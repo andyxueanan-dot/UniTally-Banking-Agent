@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": ["src/pages/BankAgent.tsx", "src/lib/bankApi.ts", "src/vite-env.d.ts"]
+}

@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /verificationCodes/{email} {
+      allow read, write: if true;
+    }
+    match /rateLimits/{email} {
+      allow read, write: if true;
+    }
+  }
+}
