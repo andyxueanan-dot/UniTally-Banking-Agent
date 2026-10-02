@@ -8,19 +8,23 @@ const { createBankStore } = require('./bank/store');
 const COOKIE = '__Host-unitally_team';
 const digest = value => createHash('sha256').update(value).digest();
 
-function createTeamShare({ origin, password, expiresAt, now = Date.now, store, planner, staticDir, maxDailyCalls = 20 }) {
+function createTeamShare({ origin, password, expiresAt, now = Date.now, store, planner, staticDir, maxDailyCalls = 20, persistent = false, authSessions }) {
   const url = new URL(origin);
   if (url.protocol !== 'https:' || url.origin !== origin || url.username || url.password || !/^[a-z0-9.-]+$/.test(url.hostname)) throw Error('An exact HTTPS public origin is required');
   if (typeof password !== 'string' || password.length < 24) throw Error('Use a randomly generated team password of at least 24 characters');
-  if (!Number.isFinite(expiresAt) || expiresAt <= now() || expiresAt > now() + 24 * 3600000) throw Error('Sharing must expire within 24 hours');
+  if (persistent) {
+    if (!authSessions || !store) throw Error('Persistent sharing requires a durable bank store and durable login sessions');
+    expiresAt = Number.MAX_SAFE_INTEGER;
+  } else if (!Number.isFinite(expiresAt) || expiresAt <= now() || expiresAt > now() + 24 * 3600000) throw Error('Sharing must expire within 24 hours');
   if (!Number.isInteger(maxDailyCalls) || maxDailyCalls < 0 || maxDailyCalls > 20) throw Error('Team AI daily limit must be 0-20');
-  const sessions = new Map();
+  const sessions = authSessions || new Map();
   let loginAttempts = [];
   let requests = [];
   const expected = digest(password);
   const app = express();
   app.disable('x-powered-by');
   const error = (res, status, code, message) => res.status(status).json({ code, message });
+  app.get('/healthz', (_req, res) => { try { if (persistent) store.read(); res.set('Cache-Control', 'no-store').json({ ok: true, service: 'unitally-team', storage: persistent ? 'postgres' : 'local', sandbox: true }); } catch { res.status(503).json({ ok: false }); } });
   app.use((req, res, next) => {
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'same-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), publickey-credentials-create=(), publickey-credentials-get=()',
@@ -37,13 +41,14 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
     next();
   });
   const loginPage = (failed = false) => `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>UniTally · 团队体验</title><style>body{margin:0;background:#edf0e7;color:#303b2b;font:17px system-ui;display:grid;min-height:100dvh;place-items:center}main{margin:24px;padding:30px;max-width:420px;background:white;border-radius:24px;box-shadow:0 12px 50px #303b2b15}p{line-height:1.8;color:#66715c}input,button{box-sizing:border-box;width:100%;padding:16px;margin:12px 0;border:1px solid #ccd2c4;border-radius:12px;font:inherit}button{background:#33452d;color:white;cursor:pointer}.warn{color:#a65e21}label{display:block}</style><main><small>UniTally / TEAM PREVIEW</small><h1>欢迎来体验</h1><p>请输入组长提供的团队口令。这里是比赛原型，账户和资金全部为模拟；请勿填写真实银行卡号、身份证或密码。</p>${failed ? '<p role="alert" class="warn">口令不正确，请重新输入。</p>' : ''}<form action="/team/login" method="post"><label for="password">团队访问口令</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required><button>进入演示</button></form><p>AI 对话会发送给 DeepSeek。团队共享每日最多 ${maxDailyCalls} 次 AI 调用；页面内验证码不是短信验证。链接临时有效，电脑离线即不可用。</p></main></html>`;
-  app.get('/team/login', (_req, res) => res.type('html').send(loginPage()));
+  const renderLogin = failed => persistent ? loginPage(failed).replace('链接临时有效，电脑离线即不可用。', '固定云端地址，免费服务空闲后可能休眠，再次打开需等待唤醒。') : loginPage(failed);
+  app.get('/team/login', (_req, res) => res.type('html').send(renderLogin()));
   app.post('/team/login', express.urlencoded({ extended: false, limit: '1kb' }), (req, res) => {
     loginAttempts = loginAttempts.filter(t => t > now() - 60000);
     if (loginAttempts.length >= 20) return error(res, 429, 'LOGIN_RATE_LIMIT', '口令尝试过多，请一分钟后重试。');
     loginAttempts.push(now());
     const input = typeof req.body.password === 'string' ? req.body.password : '';
-    if (!timingSafeEqual(digest(input), expected)) return res.status(401).type('html').send(loginPage(true));
+    if (!timingSafeEqual(digest(input), expected)) return res.status(401).type('html').send(renderLogin(true));
     if (sessions.size >= 30) return error(res, 429, 'TEAM_SESSION_LIMIT', '团队登录设备已达上限。');
     const token = randomBytes(32).toString('hex');
     const expiry = Math.min(expiresAt, now() + 8 * 3600000);

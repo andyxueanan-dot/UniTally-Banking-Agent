@@ -3,7 +3,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
 const base = 'http://localhost:8091';
-const outDir = path.resolve(import.meta.dirname, '../../evidence/T006-mobile/browser', new Date().toISOString().replaceAll(':','-').replaceAll('.','-'));
+const outDir = path.resolve(import.meta.dirname, '../../evidence/T008-quality/browser', new Date().toISOString().replaceAll(':','-').replaceAll('.','-'));
 fs.mkdirSync(outDir, { recursive: true });
 const report = { startedAt: new Date().toISOString(), checks: [], pageErrors: [], screenshots: [], forbiddenModelCalls: 0, realDevice: false };
 const browser = await chromium.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
@@ -24,6 +24,8 @@ try {
     const nav=page.getByRole('navigation',{name:'手机主导航'}); assert.equal(await nav.getByRole('button').count(),4);
     assert.equal((await state()).balance,1286000); assert.equal(await page.locator('.bm-welcome').isVisible(),true);
     assert.equal(await page.locator('.ba-assistant').isVisible(),false);
+    assert.equal(await page.locator('.ba-spending-panel').count(),0);
+    assert.equal(await page.locator('.bm-recent>div').count(),3);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false); await shot('01-home');
   });
   await check('chat entry shows only focused assistant, not desktop financial panels',async()=>{
@@ -60,7 +62,7 @@ try {
   });
   await check('native back event navigates without executing or changing balance',async()=>{
     await page.getByRole('button',{name:'助手',exact:true}).click(); await page.evaluate(()=>window.dispatchEvent(new Event('bank-mobile-back',{cancelable:true})));
-    assert.equal(await page.locator('.bm-profile-panel').isVisible(),true); assert.equal((await state()).balance,1266000);
+    await page.locator('.bm-profile-panel').waitFor(); assert.equal((await state()).balance,1266000);
   });
   await check('320px layout, keyboard class behavior, and reload persistence',async()=>{
     await page.setViewportSize({width:320,height:740}); await page.getByRole('button',{name:'助手',exact:true}).click();
@@ -84,6 +86,27 @@ try {
     await p.goto('http://localhost:5091/bank-agent',{waitUntil:'networkidle'});await p.getByTestId('balance').waitFor();
     assert.equal(await p.locator('.bm-app').count(),0);assert.equal(await p.getByRole('navigation',{name:'主要功能'}).isVisible(),true);
     await p.getByRole('button',{name:'服务中心',exact:true}).click();await p.getByRole('button',{name:'订阅与代扣',exact:true}).waitFor();await desktop.close();
+  });
+  await check('clean service directory and backend-enforced simulated card purchase', async()=>{
+    await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'首页',exact:true}).click();
+    await page.getByRole('button',{name:'更多服务',exact:true}).click();
+    const directory=page.locator('.bm-service-directory');await directory.waitFor();
+    assert.ok((await directory.boundingBox()).height<650);assert.equal(await page.locator('.ba-settings-disclosure[open]').count(),0);await shot('08-services');
+    await page.getByRole('button',{name:'扩展卡服务',exact:true}).click();
+    await page.locator('.ba-extended-card').filter({hasText:'8806'}).getByRole('button',{name:'限制线上新交易',exact:true}).click();await idle();
+    const task=page.locator('.ba-left-content .ba-task').first();await task.waitFor();
+    await task.getByRole('button',{name:'获取演示验证码',exact:true}).click();await task.getByTestId('demo-code').waitFor();
+    await task.getByRole('textbox',{name:'输入六位演示验证码'}).fill(await task.getByTestId('demo-code').innerText());
+    await task.getByRole('checkbox').check();await task.getByRole('button',{name:'确认执行',exact:true}).click();await idle();
+    await page.getByRole('button',{name:'我的',exact:true}).click();await page.getByRole('button',{name:/服务与安全设置/}).click();await page.getByRole('button',{name:'扩展卡服务',exact:true}).click();
+    await page.locator('.ba-card-payment-demo>summary').click();
+    await page.getByRole('textbox',{name:'模拟刷卡金额',exact:true}).fill('20');await page.getByRole('button',{name:'准备模拟刷卡',exact:true}).click();
+    await page.getByRole('alert').waitFor();assert.match(await page.getByRole('alert').innerText(),/限制线上交易/);assert.equal((await state()).balance,1266000);await shot('09-card-blocked');
+    await page.getByRole('combobox',{name:'模拟刷卡场景',exact:true}).selectOption('domestic-offline');await page.getByRole('button',{name:'准备模拟刷卡',exact:true}).click();await idle();
+    const payment=page.locator('.ba-left-content .ba-task').first();await payment.getByRole('button',{name:'获取演示验证码',exact:true}).click();await payment.getByTestId('demo-code').waitFor();
+    await payment.getByRole('textbox',{name:'输入六位演示验证码'}).fill(await payment.getByTestId('demo-code').innerText());await payment.getByRole('checkbox').check();
+    await payment.getByRole('button',{name:'确认执行',exact:true}).click();await idle();assert.equal((await state()).balance,1264000);assert.equal((await state()).ledger.length,2);await shot('10-card-receipt');
+    await page.getByRole('button',{name:'助手',exact:true}).click();assert.equal(await page.locator('.ba-assistant .ba-task-area').count(),0);assert.equal(await page.locator('.ba-test-cases').getAttribute('open'),null);await shot('11-assistant-clean');
   });
   assert.equal(report.forbiddenModelCalls,0); assert.equal(report.pageErrors.length,0); report.passed=true;
 } catch(error) { report.passed=false;report.error=error.stack;await shot('failure');process.exitCode=1; }

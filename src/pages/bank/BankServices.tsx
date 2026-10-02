@@ -22,6 +22,7 @@ import type {
 } from "@/lib/bankApi";
 import BankAdvancedServices from "./BankAdvancedServices";
 import BankCodeSandbox from "./BankCodeSandbox";
+import CardPaymentDemo from './CardPaymentDemo';
 
 const money = (cents: number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
@@ -205,7 +206,9 @@ export default function BankServices({
   onWorkflowDemo,
   loadSandboxStatus,
   onSandboxCompute,
+  compact = false,
 }: {
+  compact?: boolean;
   state: BankState;
   busy: boolean;
   now: number;
@@ -218,7 +221,7 @@ export default function BankServices({
     inputs: [string, string],
   ) => Promise<BankSandboxResponse | undefined>;
 }) {
-  const [section, setSection] = useState("subscriptions");
+  const [section, setSection] = useState(compact ? "" : "subscriptions");
   const [answers, setAnswers] = useState<(number | null)[]>([null, null, null]);
   const [productId, setProductId] = useState("demo-flex");
   const [amount, setAmount] = useState("");
@@ -238,11 +241,12 @@ export default function BankServices({
     );
   return (
     <>
-      <section className="ba-panel ba-service-header">
+      {compact && section && <button className="bm-service-back ba-link-button" onClick={() => setSection('')}>← 全部服务</button>}
+      {(!compact || !section) && <section className={`ba-panel ba-service-header ${compact ? 'bm-service-directory' : ''}`}>
         <div className="ba-panel-heading">
           <div>
             <span className="ba-section-kicker">MORE THAN A CONVERSATION</span>
-            <h2>把日常金融，办得明明白白。</h2>
+            <h2>{compact ? '选择你需要的服务' : '把日常金融，办得明明白白。'}</h2>
           </div>
           <ShieldCheck size={23} />
         </div>
@@ -261,6 +265,7 @@ export default function BankServices({
           ].map((s) => (
             <button
               key={s.id}
+              aria-label={s.label}
               aria-pressed={section === s.id}
               onClick={() => setSection(s.id)}
             >
@@ -269,7 +274,7 @@ export default function BankServices({
             </button>
           ))}
         </div>
-      </section>
+      </section>}
       {section === "sandbox" && (
         <BankCodeSandbox
           busy={busy}
@@ -768,6 +773,7 @@ export default function BankServices({
               );
             })}
           </div>
+          <CardPaymentDemo state={state} busy={busy} onPrepare={onPrepare} />
           {!!b.creditApplications.length && (
             <div className="ba-credit-applications">
               <h3>已提交的模拟申请</h3>

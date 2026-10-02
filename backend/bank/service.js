@@ -10,6 +10,7 @@ const { BUSINESS_TYPES, publicBusinessState, prepareBusiness, executeBusiness } 
 const { ADVANCED_TYPES, publicAdvancedState, heldCents, prepareAdvanced, executeAdvanced } = require('./advanced-payments');
 const { plannerContext } = require('./planner-context');
 const { runWasmCalculation } = require('./code-sandbox');
+const { validateCardPurchase, prepareCardPurchase, executeCardPurchase } = require('./card-payment');
 const id = () => randomBytes(12).toString('hex');
 const tokenKey = token => createHash('sha256').update(token).digest('hex');
 const money = cents => `¥${(cents / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -107,7 +108,7 @@ class BankService {
     const simulatedPayment = action?.type === 'simulate_aa_payment';
     if (simulatedPayment && (action.simulation !== true || typeof action.requestId !== 'string' || typeof action.participantId !== 'string' ||
         action.requestId.length > 80 || action.participantId.length > 80 || Object.keys(action).some(k => !['type', 'requestId', 'participantId', 'simulation'].includes(k)))) fail('INVALID_MANUAL_ACTION', '模拟到账必须通过明确标注的专用操作，参数无效。');
-    try { if (!simulatedPayment) validatePlan({ actions: [action], question: '' }); }
+    try { if (action?.type === 'card_purchase') validateCardPurchase(action); else if (!simulatedPayment) validatePlan({ actions: [action], question: '' }); }
     catch { fail('INVALID_MANUAL_ACTION', '业务面板参数无效，未创建任务。'); }
     // Opaque local IDs can contain long decimal runs; do not mistake them for
     // personal account numbers or send them to a model in manual-form history.
@@ -154,7 +155,7 @@ class BankService {
         this.store.transact(db => { const key = day(this.now()); if ((db.usage[key] || 0) >= this.maxDailyCalls) fail('AI_BUDGET_LIMIT', '今日 AI 调用已达到本机限额，可继续使用离线演示。', 429); db.usage[key] = (db.usage[key] || 0) + 1; return null; });
         plan = await this.planner.plan(text, safeHistory(snapshot.history), plannerContext(snapshot, this.now()));
       }
-      if (manualAction?.type !== 'simulate_aa_payment') validatePlan(plan);
+      if (!['simulate_aa_payment', 'card_purchase'].includes(manualAction?.type)) validatePlan(plan);
       if (plan.actions.some(a => a.type === 'transfer' && !a.reserveAmount) && /保留|留够|留出|预留|至少.{0,8}(?:剩|留)|(?:剩|留).{0,8}至少|keep.{0,20}(?:balance|remaining)|reserve/i.test(normalized(text))) {
         plan.actions = []; plan.question = '你提出了转账后的保留余额条件，但尚未明确提取出最低保留金额。请明确人民币转账金额与转账后至少保留多少元；不会忽略这个条件。';
       }
@@ -285,8 +286,11 @@ class BankService {
     }
     if (s.lockedUntil > now) fail('SAFETY_LOCKED', '敏感操作暂时锁定；查询仍可用。请等安全锁定期结束。', 423);
     if (s.tasks.length >= this.limits.maxTasks) fail('TASK_LIMIT', '本会话已达到任务配额；已有任务仍可确认、取消和对账，不会删除回执或幂等记录。', 429);
+    if (a.type === 'cancel_subscription' && !a.scope) return { type: 'clarify', text: '你希望撤销银行代扣授权，还是终止商户会员？两者不同，请明确选择后再确认。' };
     let action; let title;
-    if (ADVANCED_TYPES.includes(a.type)) {
+    if (a.type === 'card_purchase') {
+      ({ action, title } = prepareCardPurchase(s, a, now, businessTools));
+    } else if (ADVANCED_TYPES.includes(a.type)) {
       ({ action, title } = prepareAdvanced(s, a, now, businessTools));
     } else if (BUSINESS_TYPES.includes(a.type)) {
       ({ action, title } = prepareBusiness(s, a, now, businessTools));
@@ -506,7 +510,9 @@ class BankService {
   }
   execute(s, t, now) {
     const a = t.action;
-    if (ADVANCED_TYPES.includes(a.type)) {
+    if (a.type === 'card_purchase') {
+      t.result = executeCardPurchase(s, t, now, { cents, money, available, fail, id, audit });
+    } else if (ADVANCED_TYPES.includes(a.type)) {
       t.result = executeAdvanced(s, t, now, { cents, money, available, fail, id, audit });
     } else if (BUSINESS_TYPES.includes(a.type)) {
       t.result = executeBusiness(s, t, now, { cents, money, available, fail, id, audit });

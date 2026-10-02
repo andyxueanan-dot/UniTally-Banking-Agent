@@ -62,6 +62,7 @@ import PasskeyPanel from "./bank/PasskeyPanel";
 import { passkeyLocalUrl } from "@/lib/bankApi";
 import { connectionDetails } from '@/lib/bankConnection';
 import MobileTransferSheet from '@/mobile/MobileTransferSheet';
+import MobileHome from '@/mobile/MobileHome';
 
 const money = (cents: number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
@@ -699,7 +700,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
   useEffect(() => {
     if (chatBody.current)
       chatBody.current.scrollTop = chatBody.current.scrollHeight;
-  }, [state?.history.length, busy]);
+  }, [state?.history.length, busy, tab]);
   useEffect(() => {
     if (error) errorBox.current?.scrollIntoView({ block: "nearest" });
   }, [error]);
@@ -840,6 +841,8 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
         action,
       });
       applyState(result.state);
+      const blocked = result.message?.results?.find(r => r.type === 'blocked' || r.type === 'clarify');
+      if (blocked) setError(blocked.text);
       window.setTimeout(
         () =>
           document
@@ -1161,7 +1164,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
           </div>
         </header>
         <main className="ba-main">
-          {mobile && tab === 'overview' && <section className="bm-welcome"><span>YOUR EVERYDAY BANKING COMPANION</span><h1>你好，今天想办什么？</h1><p>说清需求，核对详情，再放心确认。</p><button className="bm-ask" onClick={() => go('assistant')}><Sparkles size={21} /><span>向 UniTally 说一句话</span><ArrowRight size={19} /></button><div className="bm-shortcuts">{[{title:'转一笔钱',icon:ArrowUpRight,action:()=>setTransferOpen(true)},{title:'查账单',icon:ReceiptText,action:()=>go('bills')},{title:'管卡片',icon:CreditCard,action:()=>go('cards')},{title:'更多服务',icon:Grid2X2,action:()=>go('services')}].map(item=><button key={item.title} onClick={item.action} disabled={busy||!state}><span><item.icon size={22} /></span>{item.title}</button>)}</div></section>}
+          {mobile && tab === 'overview' && state && <MobileHome state={state} pending={pending.length} busy={busy} onNavigate={id => { if (id === 'audit') setTaskFilter('active'); go(id); }} onTransfer={() => setTransferOpen(true)} />}
           <section className="ba-intro">
             <div>
               <div className="ba-eyebrow">
@@ -1202,7 +1205,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
           )}
           {state && (
             <>
-              <section className="ba-stats">
+              {!mobile && <section className="ba-stats">
                 <div className="ba-balance-card">
                   <div className="ba-balance-top">
                     <span>
@@ -1267,17 +1270,13 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                     <ArrowRight size={17} />
                   </span>
                 </button>
-              </section>
+              </section>}
               <div className={`ba-content-grid ba-page-${tab}`}>
                 <div className="ba-left-content">
                   {tab === "services" && (
                     <>
-                      {!connection.native && <PasskeyPanel
-                        auth={state.auth}
-                        busy={busy}
-                        onRegister={registerDevice}
-                      />}
                       <BankServices
+                        compact={mobile}
                         state={state}
                         busy={busy}
                         now={now}
@@ -1287,10 +1286,11 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                         loadSandboxStatus={loadSandboxStatus}
                         onSandboxCompute={computeSandbox}
                       />
+                      {!connection.native && <details className="ba-settings-disclosure"><summary>设备验证与安全设置</summary><PasskeyPanel auth={state.auth} busy={busy} onRegister={registerDevice} /></details>}
                     </>
                   )}
                   {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">U</div><h2>我的演示账户</h2><p>虚构数据，不关联真实银行卡。</p><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => go('services')}><Grid2X2 size={19} />服务与安全设置<ChevronRight size={17}/></button><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
-                  {tab === "overview" && (
+                  {!mobile && tab === "overview" && (
                     <>
                       <section className="ba-panel ba-spending-panel">
                         <div className="ba-panel-heading">
@@ -1393,7 +1393,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       </section>
                     </>
                   )}
-                  {(tab === "overview" || tab === "bills") && (
+                  {((!mobile && tab === "overview") || tab === "bills") && (
                     <section className="ba-panel">
                       <div className="ba-panel-heading">
                         <div>
@@ -1675,7 +1675,8 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           )}
                         </div>
                       </section>
-                      <section className="ba-panel">
+                      <details className="ba-panel ba-audit-details">
+                        <summary>查看操作时间线与技术记录</summary>
                         <div className="ba-panel-heading">
                           <h2>可核查的操作时间线</h2>
                           <button
@@ -1705,7 +1706,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           日志展示最近 120
                           条工具操作、授权与结果，不包含模型内部推理；本地演示记录不是不可篡改的银行审计系统。
                         </p>
-                      </section>
+                      </details>
                     </>
                   )}
                   <div className="ba-safety-strip">
@@ -1771,7 +1772,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                     aria-label="助手对话"
                     ref={chatBody}
                   >
-                    <div className="ba-welcome">
+                    {state.history.length === 0 && <div className="ba-welcome">
                       <span className="ba-tiny-avatar">
                         <Sparkles size={15} />
                       </span>
@@ -1781,7 +1782,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           说说你想办什么。查账单可以直接完成；涉及钱和卡片，我会先准备详情，等你确认。
                         </p>
                       </div>
-                    </div>
+                    </div>}
                     {state.history.map((m) => (
                       <div className={`ba-message ${m.role}`} key={m.id}>
                         {m.role === "assistant" && (
@@ -1800,15 +1801,15 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                             <AnalysisResult key={i} result={r} />
                           ))}
                           {m.meta && (
-                            <small className="ba-message-source">
+                            <details className="ba-message-source"><summary>{m.meta.mode === 'ai' ? 'AI 规划 · 后台核验' : m.meta.mode === 'manual' ? '表单操作 · 非 AI' : '固定案例 · 非 AI'}</summary><small>
                               {m.meta.mode === "ai"
                                 ? `DeepSeek 规划 · ${(m.meta.latencyMs / 1000).toFixed(1)} 秒 · ${m.meta.totalTokens} tokens`
                                 : m.meta.mode === "manual"
                                   ? "业务面板 · 用户填写（未调用 AI）"
                                   : "离线固定案例（未调用模型）"}
                               <br />
-                              业务数字与执行结果均来自本机后台
-                            </small>
+                              业务数字与执行结果均来自模拟账本
+                            </small></details>
                           )}
                         </div>
                       </div>
@@ -1874,7 +1875,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       。查询仍可使用。
                     </div>
                   )}
-                  {tab !== "audit" && (
+                  {!mobile && tab !== "audit" && (
                     <div className="ba-task-area" id="bank-active-tasks">
                       <div className="ba-task-area-heading">
                         <h3>
@@ -1910,7 +1911,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       )}
                     </div>
                   )}
-                  <details className="ba-test-cases" open>
+                  <details className="ba-test-cases">
                     <summary>
                       也试试安全边界
                       <ChevronDown size={14} />
