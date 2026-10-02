@@ -207,7 +207,7 @@ export default function BankCodeSandbox({
                 <div>
                   <strong>未执行任何计算</strong>
                   <p>
-                    请在 UniTally 仓库目录创建专用 .venv-sandbox 环境，并安装锁定依赖。
+                    请在 FinPilot 仓库目录创建专用 .venv-sandbox 环境，并安装锁定依赖。
                     不要在无关的全局环境安装，也不需要配置 API 密钥。
                   </p>
                   {(status.installCommands || []).map(command => <pre key={command}><code>{command}</code></pre>)}

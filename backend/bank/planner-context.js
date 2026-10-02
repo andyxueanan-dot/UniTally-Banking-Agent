@@ -1,8 +1,10 @@
 // Explicit allowlist: free-text merchant/budget labels, credentials, pending
 // challenges and contact phone numbers are NEVER included in model context.
+const { calendarContext } = require('./calendar');
 function plannerContext(s, now) {
   return {
     currentTime: new Date(now).toISOString(), localTimeZone: 'Asia/Shanghai (UTC+8)', currency: 'CNY', dataKind: 'fictional_sandbox',
+    calendar: calendarContext(now),
     contacts: s.contacts.map(c => ({ id: c.id, name: c.name, last4: c.last4 })),
     cards: s.cards.map(c => ({ last4: c.last4, status: c.status })),
     recentTasks: s.tasks.slice(-5).map(t => ({ id: t.id, type: t.action.type, status: t.status, receiptId: t.receipt?.id || null })),

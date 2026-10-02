@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">UniTally 银行演示</string>
-    <string name="title_activity_main">UniTally 银行演示</string>
+    <string name="app_name">FinPilot 银行演示</string>
+    <string name="title_activity_main">FinPilot 银行演示</string>
     <string name="package_name">com.unitally.bankingdemo</string>
     <string name="custom_url_scheme">com.unitally.bankingdemo</string>
 </resources>

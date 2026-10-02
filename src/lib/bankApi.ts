@@ -197,6 +197,7 @@ export interface BankMessage {
   };
 }
 export interface BankState {
+  feedbackCount?: number;
   advanced?: BankAdvanced;
   auth?: { mode: "demo_otp" | "passkey"; canRegister: boolean; origin: string };
   referenceMonth: string;

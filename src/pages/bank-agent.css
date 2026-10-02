@@ -1,4 +1,11 @@
 /* Original UniTally financial workspace: warm paper, ink and apricot. */
+.ba-planner-feedback { margin-top:10px; font-size:11px; color:#62715a; }
+.ba-planner-feedback summary { cursor:pointer; }
+.ba-planner-feedback form { display:flex; flex-direction:column; gap:9px; margin-top:10px; }
+.ba-planner-feedback label { display:flex; flex-direction:column; gap:5px; }
+.ba-planner-feedback textarea { background:white; color:#24352c; border:1px solid #d5dfcf; border-radius:8px; min-height:90px; padding:9px; width:100%; resize:vertical; }
+.ba-planner-feedback button { align-self:flex-start; border:1px solid #bdcbb4; padding:7px 12px; border-radius:7px; background:#f7faf3; }
+.ba-planner-feedback p { font-size:11px!important; line-height:1.6!important; }
 .ba-root {
   --ba-ink: #252923;
   --ba-muted: #6d7168;

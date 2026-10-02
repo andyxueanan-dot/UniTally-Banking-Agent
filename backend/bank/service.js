@@ -10,6 +10,7 @@ const { BUSINESS_TYPES, publicBusinessState, prepareBusiness, executeBusiness } 
 const { ADVANCED_TYPES, publicAdvancedState, heldCents, prepareAdvanced, executeAdvanced } = require('./advanced-payments');
 const { plannerContext } = require('./planner-context');
 const { runWasmCalculation } = require('./code-sandbox');
+const { enforceTemporalPlan } = require('./calendar');
 const { validateCardPurchase, prepareCardPurchase, executeCardPurchase } = require('./card-payment');
 const id = () => randomBytes(12).toString('hex');
 const tokenKey = token => createHash('sha256').update(token).digest('hex');
@@ -56,7 +57,7 @@ function view(s, now) {
     auth: { mode: s.passkeyCredential ? 'passkey' : 'demo_otp', canRegister: !s.passkeyCredential, origin: s.passkeyOrigin || 'http://localhost:5091' },
     contacts: s.contacts.map(({ balance, ...c }) => c), cards: s.cards, transactions: s.transactions,
     tasks: s.tasks.map(t => publicTask(t, now)).reverse(), audit: s.audit.slice(-120).reverse(),
-    history: s.history.slice(-40), workflows: s.workflows || [], business: publicBusinessState(s, now), advanced: publicAdvancedState(s, now), lockedUntil: s.lockedUntil, ledger: s.ledger.slice(-50), sandbox: true };
+    history: s.history.slice(-40), feedbackCount: (s.plannerFeedback || []).length, workflows: s.workflows || [], business: publicBusinessState(s, now), advanced: publicAdvancedState(s, now), lockedUntil: s.lockedUntil, ledger: s.ledger.slice(-50), sandbox: true };
 }
 
 class BankService {
@@ -87,6 +88,33 @@ class BankService {
     return { token, state };
   }
   get(token) { return view(this.session(this.store.read(), token), this.now()); }
+  feedback(token, { messageId, correction } = {}) {
+    if (typeof messageId !== 'string' || messageId.length > 80 || typeof correction !== 'string' || !correction.trim() || correction.length > 1000) fail('INVALID_FEEDBACK', '请填写最多1000字的纠正说明。');
+    if (hasPrivateData(correction)) fail('PRIVATE_DATA_BLOCKED', '纠错说明不能包含真实账号、手机号或密钥。');
+    return this.store.transact(db => {
+      const s = this.session(db, token); const now = this.now();
+      const index = s.history.findIndex(m => m.id === messageId && m.role === 'assistant');
+      if (index < 0) fail('MESSAGE_NOT_FOUND', '当前会话中没有这条助手回复。', 404);
+      s.plannerFeedback ||= [];
+      if (s.plannerFeedback.length >= 100) fail('FEEDBACK_LIMIT', '本会话纠错队列已满，请先导出并审核，不自动删除记录。', 429);
+      const message = s.history[index];
+      const input = s.history.slice(0, index).reverse().find(m => m.role === 'user')?.text || '';
+      const item = { id: id(), kind: 'user_correction', messageId, input: hasPrivateData(input) ? '[敏感内容已移除]' : input.slice(0, 1000), correction: correction.trim(),
+        provider: message.meta?.provider || 'unknown', at: now, status: 'UNREVIEWED', eligibleForPrompt: false };
+      s.plannerFeedback.push(item);
+      for (const taskId of (message.results || []).filter(r => r.type === 'proposal').map(r => r.taskId)) {
+        const task = s.tasks.find(t => t.id === taskId);
+        if (task?.status === 'AWAITING_CONFIRMATION') {
+          finishDraft(task, 'SUPERSEDED', now);
+          const flow = (s.workflows || []).find(f => f.id === task.workflowId);
+          if (flow && !['SUCCEEDED', 'CANCELLED'].includes(flow.status)) workflow.pauseWorkflow(flow, now, { reason: '用户指出此草案理解有误，等待重新核对。' });
+        }
+      }
+      audit(s, 'PLANNER_FEEDBACK_RECORDED', '用户纠错已进入待审核队列；相关未确认草案失效。未训练模型、未加入提示词、未执行纠正后的指令。', now);
+      return { saved: true, feedbackId: item.id, state: view(s, now) };
+    });
+  }
+  feedbackExport(token) { const s = this.session(this.store.read(), token); return { classification: 'Unreviewed private feedback; redact and review before adding to evaluation or prompts', items: structuredClone(s.plannerFeedback || []) }; }
   async compute(token, request) {
     this.store.transact(db => {
       const s = this.session(db, token); const now = this.now();
@@ -101,7 +129,7 @@ class BankService {
       return { calculation, state: view(s, now) };
     });
   }
-  metadata() { return { serverNow: this.now(), aiConfigured: this.planner.configured, model: this.planner.model, provider: 'DeepSeek', sandbox: true, maxDailyCalls: this.maxDailyCalls, limits: this.limits,
+  metadata() { return { serverNow: this.now(), aiConfigured: this.planner.configured, model: this.planner.model, provider: this.planner.provider || 'Test planner', sandbox: true, maxDailyCalls: this.maxDailyCalls, limits: this.limits,
     auth: { mode: 'session_required', canRegister: false, origin: this.passkey.origin },
     aiCallsToday: this.store.read().usage[day(this.now())] || 0 }; }
   prepareManual(token, action) {
@@ -148,14 +176,16 @@ class BankService {
     this.inFlight.add(token);
     try {
       let plan;
+      const planningNow = this.now();
       if (manualAction) plan = { actions: [structuredClone(manualAction)], question: '', meta: { mode: 'manual', provider: '用户填写业务面板（未调用 AI）', latencyMs: 0, totalTokens: 0 } };
       else if (demo) plan = { ...structuredClone(DEMOS[demo]), meta: { mode: 'offline', provider: '固定案例（非 AI）', latencyMs: 0, totalTokens: 0 } };
       else {
         if (!this.planner.configured) fail('AI_NOT_CONFIGURED', 'DeepSeek 尚未配置；可切换离线演示。', 503);
         this.store.transact(db => { const key = day(this.now()); if ((db.usage[key] || 0) >= this.maxDailyCalls) fail('AI_BUDGET_LIMIT', '今日 AI 调用已达到本机限额，可继续使用离线演示。', 429); db.usage[key] = (db.usage[key] || 0) + 1; return null; });
-        plan = await this.planner.plan(text, safeHistory(snapshot.history), plannerContext(snapshot, this.now()));
+        plan = await this.planner.plan(text, safeHistory(snapshot.history), plannerContext(snapshot, planningNow));
       }
       if (!['simulate_aa_payment', 'card_purchase'].includes(manualAction?.type)) validatePlan(plan);
+      if (!manualAction && !demo) plan = enforceTemporalPlan(plan, text, planningNow, this.now());
       if (plan.actions.some(a => a.type === 'transfer' && !a.reserveAmount) && /保留|留够|留出|预留|至少.{0,8}(?:剩|留)|(?:剩|留).{0,8}至少|keep.{0,20}(?:balance|remaining)|reserve/i.test(normalized(text))) {
         plan.actions = []; plan.question = '你提出了转账后的保留余额条件，但尚未明确提取出最低保留金额。请明确人民币转账金额与转账后至少保留多少元；不会忽略这个条件。';
       }
@@ -173,7 +203,7 @@ class BankService {
         const s = this.session(db, token); const now = this.now();
         if (s.intentVersion !== admitted.version) fail('INTENT_CHANGED', '需求已变化，本次旧规划不会生成操作。', 409);
         s.history.push({ role: 'user', text, at: now, id: id() });
-        audit(s, 'INTENT_PARSED', `${plan.meta.mode === 'ai' ? 'DeepSeek 工具规划' : plan.meta.mode === 'manual' ? '用户填写业务面板（无模型）' : '离线固定案例'}：${plan.actions.map(a => a.type).join(' → ') || '澄清/不支持'}；仅提出草案，没有执行写操作。`, now);
+        audit(s, 'INTENT_PARSED', `${plan.meta.mode === 'ai' ? `${plan.meta.provider} 工具规划` : plan.meta.mode === 'manual' ? '用户填写业务面板（无模型）' : '离线固定案例'}：${plan.actions.map(a => a.type).join(' → ') || '澄清/不支持'}；仅提出草案，没有执行写操作。`, now);
         let results = [];
         if (plan.actions.length > 1) {
           if ((s.workflows || []).length >= 40) fail('WORKFLOW_LIMIT', '本会话工作流已达40个；历史记录保留，请继续已有工作流。', 429);
@@ -190,6 +220,11 @@ class BankService {
         s.history.push(message); s.history = s.history.slice(-40);
         return { message, state: view(s, now) };
       });
+    } catch (error) {
+      if (['INVALID_AI_PLAN', 'DATE_CONTEXT_EXPIRED'].includes(error.code)) {
+        try { this.store.transact(db => { const s = this.session(db, token); s.plannerFeedback ||= []; if (s.plannerFeedback.length < 100) s.plannerFeedback.push({ id: id(), kind: 'model_failure', input: text.slice(0, 1000), code: error.code, provider: this.planner.provider || 'unknown', at: this.now(), status: 'UNREVIEWED', eligibleForPrompt: false }); }); } catch { /* Preserve original failure; never fabricate successful execution. */ }
+      }
+      throw error;
     } finally { this.inFlight.delete(token); }
   }
   progressWorkflow(s, flow, now, simulateTimeout = false) {

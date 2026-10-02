@@ -3,14 +3,14 @@ const path = require('node:path');
 const fs = require('node:fs');
 require('dotenv').config({ path: path.join(__dirname, '.env.bank.local') });
 const { createBankStore } = require('./bank/store');
-const { createDeepSeekPlanner } = require('./bank/planner');
+const { plannerFromEnvironment } = require('./bank/planner');
 const { BankService } = require('./bank/service');
 const { runWasmCalculation, LIMITS } = require('./bank/code-sandbox');
 
 function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk, passkeyOrigin = 'http://localhost:5091' } = {}) {
   const app = express();
   const service = new BankService({ store: store || createBankStore(process.env.BANK_DATA_PATH || path.join(__dirname, 'data', 'bank-agent.json')),
-    planner: planner || createDeepSeekPlanner({ apiKey: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL || 'deepseek-chat' }), now, limits, passkeySdk, passkeyOrigin, maxDailyCalls: maxDailyCalls ?? Number(process.env.BANK_MAX_AI_CALLS_PER_DAY || 80) });
+    planner: planner || plannerFromEnvironment(), now, limits, passkeySdk, passkeyOrigin, maxDailyCalls: maxDailyCalls ?? Number(process.env.BANK_MAX_AI_CALLS_PER_DAY || 80) });
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.set('X-Content-Type-Options', 'nosniff'); res.set('Referrer-Policy', 'no-referrer'); res.set('X-Frame-Options', 'DENY');
@@ -51,6 +51,8 @@ function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk,
   app.get('/api/bank/state', wrap((req, res) => send(req, res, service.get(token(req)))));
   app.post('/api/bank/chat', wrap(async (req, res) => send(req, res, await service.chat(token(req), req.body))));
   app.post('/api/bank/prepare', wrap(async (req, res) => send(req, res, await service.prepareManual(token(req), req.body.action))));
+  app.post('/api/bank/feedback', wrap((req, res) => send(req, res, service.feedback(token(req), req.body))));
+  app.get('/api/bank/feedback', wrap((req, res) => send(req, res, service.feedbackExport(token(req)))));
   app.get('/api/bank/sandbox/status', wrap(async (req, res) => { service.get(token(req)); return send(req, res, await sandboxStatus()); }));
   app.post('/api/bank/sandbox/compute', wrap(async (req, res) => send(req, res, await service.compute(token(req), req.body))));
   app.post('/api/bank/workflows/:id/:action', wrap((req, res) => send(req, res, service.workflowControl(token(req), req.params.id, req.params.action))));

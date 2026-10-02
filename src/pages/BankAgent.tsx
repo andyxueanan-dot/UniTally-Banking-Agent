@@ -63,6 +63,7 @@ import { passkeyLocalUrl } from "@/lib/bankApi";
 import { connectionDetails } from '@/lib/bankConnection';
 import MobileTransferSheet from '@/mobile/MobileTransferSheet';
 import MobileHome from '@/mobile/MobileHome';
+import PlannerFeedback from './bank/PlannerFeedback';
 
 const money = (cents: number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
@@ -683,7 +684,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     }
   }, [applyState, handleError]);
   useEffect(() => {
-    document.title = "UniTally · 银行智能体工作台";
+    document.title = "FinPilot · 银行智能体工作台";
     document.documentElement.lang = "zh-CN";
     void load();
   }, [load]);
@@ -721,7 +722,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     if (!token || busy || !text.trim()) return;
     if (mode === "offline" && !demo) {
       setError(
-        "离线模式只运行明确的固定案例，不会理解自由输入。自由对话需要已配置的 DeepSeek。",
+        "离线模式只运行明确的固定案例，不会理解自由输入。自由对话需要已配置的 AI 模型。",
       );
       return;
     }
@@ -858,6 +859,20 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
       setBusy(false);
     }
   };
+  const saveFeedback = async (messageId: string, correction: string) => {
+    if (!token || busy) return false;
+    setBusy(true); setError('');
+    try { const result = await bankRequest<{ state: BankState }>('/feedback', token, { messageId, correction }); applyState(result.state); return true; }
+    catch (e) { handleError(e); return false; }
+    finally { setBusy(false); }
+  };
+  const exportFeedback = async () => {
+    if (!token || busy) return;
+    setBusy(true); setError('');
+    try { const value = await bankRequest('/feedback', token); const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'planner-feedback-unreviewed.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    catch (e) { handleError(e); }
+    finally { setBusy(false); }
+  };
   const controlWorkflow = async (id: string, action: string) => {
     if (!token || busy) return;
     setBusy(true);
@@ -959,7 +974,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     );
     const a = document.createElement("a");
     a.href = url;
-    a.download = "unitally-bank-demo-audit.json";
+    a.download = "finpilot-bank-demo-audit.json";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1061,14 +1076,14 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     : "本月";
   return (
     <div className={`ba-root ${mobile ? `bm-app bm-tab-${tab}` : ''}`}>
-      {mobile && <header className="bm-header"><div>{tab !== 'overview' ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : <span className="bm-brand"><Landmark size={20} /></span>}<strong>{({overview:'UniTally',assistant:'AI 助手',audit:'待办与回执',profile:'我的',bills:'账单明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
+      {mobile && <header className="bm-header"><div>{tab !== 'overview' ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : <span className="bm-brand"><Landmark size={20} /></span>}<strong>{({overview:'FinPilot',assistant:'AI 助手',audit:'待办与回执',profile:'我的',bills:'账单明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
       <aside className="ba-sidebar">
-        <a className="ba-logo" href="/bank-agent" aria-label="UniTally 首页">
+        <a className="ba-logo" href="/bank-agent" aria-label="FinPilot 首页">
           <span className="ba-logo-mark">
             <Landmark size={23} />
           </span>
           <span>
-            UniTally<span className="ba-brand-dot">.</span>
+            FinPilot<span className="ba-brand-dot">.</span>
             <small>你的金融行动助手</small>
           </span>
         </a>
@@ -1117,7 +1132,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
             <ArrowUpRight size={15} />
           </button>
           <div className="ba-profile">
-            <span>U</span>
+            <span>F</span>
             <div>
               演示体验账户<small>本地会话 · 不关联真实银行</small>
             </div>
@@ -1289,7 +1304,8 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       {!connection.native && <details className="ba-settings-disclosure"><summary>设备验证与安全设置</summary><PasskeyPanel auth={state.auth} busy={busy} onRegister={registerDevice} /></details>}
                     </>
                   )}
-                  {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">U</div><h2>我的演示账户</h2><p>虚构数据，不关联真实银行卡。</p><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => go('services')}><Grid2X2 size={19} />服务与安全设置<ChevronRight size={17}/></button><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
+                  {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">F</div><h2>我的演示账户</h2><p>虚构数据，不关联真实银行卡。</p><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => go('services')}><Grid2X2 size={19} />服务与安全设置<ChevronRight size={17}/></button><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
+                  {mobile && tab === 'profile' && <details className="ba-settings-disclosure"><summary>模型纠错记录 · {state.feedbackCount || 0} 条</summary><div className="ba-panel"><p>记录只用于人工审核，不自动加入提示词。导出后先脱敏，不要直接公开。</p><button className="ba-secondary" disabled={busy} onClick={exportFeedback}>导出待审核纠错</button></div></details>}
                   {!mobile && tab === "overview" && (
                     <>
                       <section className="ba-panel ba-spending-panel">
@@ -1370,7 +1386,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                         <div className="ba-mini-card">
                           <div>
                             <span>
-                              UniTally <small>DEBIT · DEMO</small>
+                              FinPilot <small>DEBIT · DEMO</small>
                             </span>
                             <CreditCard size={27} />
                           </div>
@@ -1727,11 +1743,11 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       <small>
                         <span className="ba-dot" />
                         {mode === "ai"
-                          ? "DeepSeek · 真实模型规划"
+                          ? `${health?.provider || 'AI'} · AI 模式`
                           : "离线固定案例 · 非 AI"}
                       </small>
                     </div>
-                    <span className="ba-assistant-wordmark">U.</span>
+                    <span className="ba-assistant-wordmark">F.</span>
                   </div>
                   <div className="ba-mode-bar">
                     <span>理解需求的方式</span>
@@ -1744,7 +1760,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       disabled={busy}
                     >
                       <option value="ai" disabled={!health?.aiConfigured}>
-                        DeepSeek AI
+                        {health?.provider || 'AI'} AI
                       </option>
                       <option value="offline">离线演示（非 AI）</option>
                     </select>
@@ -1800,10 +1816,11 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           {m.results?.map((r, i) => (
                             <AnalysisResult key={i} result={r} />
                           ))}
+                          {m.role === 'assistant' && m.meta?.mode === 'ai' && <PlannerFeedback busy={busy} onSave={correction => saveFeedback(m.id, correction)} />}
                           {m.meta && (
                             <details className="ba-message-source"><summary>{m.meta.mode === 'ai' ? 'AI 规划 · 后台核验' : m.meta.mode === 'manual' ? '表单操作 · 非 AI' : '固定案例 · 非 AI'}</summary><small>
                               {m.meta.mode === "ai"
-                                ? `DeepSeek 规划 · ${(m.meta.latencyMs / 1000).toFixed(1)} 秒 · ${m.meta.totalTokens} tokens`
+                                ? `${m.meta.provider} / ${m.meta.model || '模型'} · ${(m.meta.latencyMs / 1000).toFixed(1)} 秒 · ${m.meta.totalTokens} tokens`
                                 : m.meta.mode === "manual"
                                   ? "业务面板 · 用户填写（未调用 AI）"
                                   : "离线固定案例（未调用模型）"}
@@ -1945,7 +1962,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
               <footer className="ba-footer">
                 <span>
                   <Landmark size={13} />
-                  UniTally Banking Lab · 国内赛题原型
+                  FinPilot Banking Lab · 国内赛题原型
                 </span>
                 <span>
                   {mode === "ai" ? "真实 AI 规划" : "离线固定案例 · 非 AI"} ·
@@ -2029,7 +2046,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                 <div className="ba-guide-warning">
                   验证码不是短信或真实多因素认证。离线模式只运行固定案例；AI
                   模式会将输入发往
-                  DeepSeek，请勿提供任何真实个人信息。本版本不执行模型生成的代码。
+                  {health?.provider || '后端配置的模型供应商'}，请勿提供任何真实个人信息。本版本不执行模型生成的代码。
                 </div>
                 <button className="ba-primary" onClick={() => setModal(null)}>
                   开始体验

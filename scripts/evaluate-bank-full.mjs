@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 const root = path.resolve(import.meta.dirname, '..');
-const datasetPath = path.join(root, 'evaluation/bank-intents.full.json');
+const datasetPath = path.join(root, process.argv.includes('--temporal') ? 'evaluation/bank-date-traps.json' : 'evaluation/bank-intents.full.json');
 const dataset = JSON.parse(fs.readFileSync(datasetPath));
 const ids = process.argv.find(x => x.startsWith('--ids='))?.slice(6).split(',');
 const cases = dataset.cases.filter(x => !ids || ids.includes(x.id));
@@ -25,6 +25,7 @@ const { BankService } = require('../backend/bank/service');
 const { createBankStore } = require('../backend/bank/store');
 const native = createDeepSeekPlanner({ apiKey: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL || 'deepseek-chat' });
 const report = { run, classification: dataset.classification, harnessVersion: 3, workflowNote: 'Harness explicitly clicks advance when workflow is READY; this is not autonomous continuation.', startedAt: new Date().toISOString(), cases: [],
+  dataset: path.basename(datasetPath), datasetHash: createHash('sha256').update(fs.readFileSync(datasetPath)).digest('hex'),
   commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   sourceHashes: Object.fromEntries(['backend/bank/service.js','backend/bank/planner.js','evaluation/bank-intents.full.json'].map(p => [p, createHash('sha256').update(fs.readFileSync(path.join(root, p))).digest('hex')])) };
 const save = () => { fs.writeFileSync(target, JSON.stringify(report, null, 2)); fs.writeFileSync(budgetPath, JSON.stringify(budget, null, 2)); };
@@ -41,7 +42,7 @@ try {
       captured = await native.plan(text, history, accountContext);
       budget.totalTokens += captured.meta.totalTokens || 0; save(); return captured;
     } };
-    const service = new BankService({ store: createBankStore(), planner, now: () => Date.parse('2026-10-02T12:00:00+08:00') });
+    const service = new BankService({ store: createBankStore(), planner, now: () => Date.parse(sample.now || '2026-10-02T12:00:00+08:00') });
     const { token } = service.create();
     const confirm = task => service.confirm(token, task.id, { confirmed: true, ...(task.risk === 'red' ? { code: service.challenge(token, task.id).demoCode } : {}) });
     const setup = async action => { const r = await service.prepareManual(token, action); const t = r.state.tasks.find(t => t.status === 'AWAITING_CONFIRMATION'); if (!t) throw Error('Fixture setup did not prepare a task'); const done = confirm(t); if (done.error) throw Error('Fixture setup confirmation failed'); };
@@ -53,7 +54,10 @@ try {
       if (sample.setup === 'position') { await setup({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }); input = input.replace('{positionId}', service.get(token).business.positions[0].id); }
       if (sample.setup === 'pending') await service.chat(token, { text: '给王明转200元', demo: 'transfer' });
       const before = service.get(token);
+      const attemptsBefore = budget.attempts;
       const response = await service.chat(token, { text: input });
+      check('Live evaluation made exactly one provider call', budget.attempts === attemptsBefore + 1);
+      check('Response is model-originated, never offline/manual fallback', response.message.meta?.mode === 'ai' && response.message.meta.provider === captured?.meta.provider);
       const tasks = response.state.tasks.filter(t => t.status === 'AWAITING_CONFIRMATION');
       check('No debit before explicit test-harness authorization', response.state.balance === before.balance && response.state.ledger.length === before.ledger.length);
       if (sample.types) check('Exact intended action sequence', JSON.stringify(captured.actions.map(a => a.type)) === JSON.stringify(sample.types));
@@ -63,6 +67,7 @@ try {
       if (sample.cents) check('Exact cents', tasks[0]?.action.cents === sample.cents);
       if (sample.risk) check('Backend risk level', tasks[0]?.risk === sample.risk);
       if (sample.recipientId) check('Correct recipient', tasks[0]?.action.recipientId === sample.recipientId);
+      if (sample.expectedExecutionUtc) check('Deterministic scheduled UTC instant', Number.isFinite(tasks[0]?.action.executeAt) && new Date(tasks[0].action.executeAt).toISOString() === sample.expectedExecutionUtc);
       if (sample.confirm) {
         check('Executable task actually prepared', tasks.length > 0);
         let state = response.state;

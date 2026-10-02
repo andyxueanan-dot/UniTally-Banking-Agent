@@ -1,9 +1,11 @@
 // Deterministic accounting queries. Model text is never a source for numeric totals.
-const PERIODS = ['this_month', 'last_month', 'compare', 'this_year', 'last_year', 'all'];
+const { QUERY_KEYS, calendarContext } = require('./calendar');
+const PERIODS = ['this_month', 'last_month', 'compare', 'this_year', 'last_year', 'all', ...QUERY_KEYS];
 const CATEGORIES = ['餐饮', '购物', '交通', '订阅', '学习', '转账'];
 const cny = value => `¥${(value / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 function localDate(now) { return new Date(now + 8 * 3600000).toISOString().slice(0, 10); }
 function bounds(period, now) {
+  if (QUERY_KEYS.includes(period)) { const r = calendarContext(now).ranges[period]; return { ...r, label: `${r.startDate}${r.endDate === r.startDate ? '' : ' 至 ' + r.endDate}（北京时间）` }; }
   const today = localDate(now); const year = Number(today.slice(0, 4)); const month = Number(today.slice(5, 7));
   const previous = new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 7);
   if (period === 'last_month') return { prefix: previous, label: previous };
@@ -17,7 +19,7 @@ function filterRows(transactions, { period = 'this_month', category, merchant, i
   if (category && !CATEGORIES.includes(category)) throw Object.assign(Error('请使用已支持的消费分类。'), { code: 'INVALID_CATEGORY' });
   if (merchant != null && (typeof merchant !== 'string' || merchant.length > 80)) throw Object.assign(Error('商户筛选必须是最多80字的文本。'), { code: 'INVALID_MERCHANT' });
   const range = bounds(period, now);
-  const rows = transactions.filter(t => t.date.startsWith(range.prefix) && (includeTransfers || t.type === 'expense') &&
+  const rows = transactions.filter(t => (range.startDate ? t.date >= range.startDate && t.date <= range.endDate : t.date.startsWith(range.prefix)) && (includeTransfers || t.type === 'expense') &&
     (!category || t.category === category) && (!merchant || t.merchant.includes(merchant)));
   return { rows, range };
 }

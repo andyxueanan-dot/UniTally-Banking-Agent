@@ -1,4 +1,6 @@
-# UniTally · 银行智能助手
+# FinPilot · 银行智能助手
+
+产品展示名已改为 FinPilot。为了保留现有链接与账户记录，仓库名、网址和内部存储标识暂时沿用 UniTally；原项目来源与作者说明保持不变。
 
 > **团队在线体验**：[https://unitally-team.onrender.com](https://unitally-team.onrender.com)。输入组长单独提供的口令即可使用，不需要安装 Node，也不需要组长电脑开机。免费服务空闲后会休眠，首次打开可能需等待约一分钟。尚未生成 APK。
 
@@ -14,7 +16,7 @@
 
 ### 固定在线体验链接（无需安装，推荐）
 
-打开 **[UniTally 团队网站](https://unitally-team.onrender.com)**，输入组长单独提供的团队口令，即可在手机或电脑体验。网站和模拟账本托管在云端，正常更新、休眠和重启不需要换网址。不要在 GitHub 公布口令，也不要输入真实银行资料。团队 AI 每天合计最多 20 次调用，DeepSeek 费用不包含在免费托管内。
+打开 **[FinPilot 团队网站](https://unitally-team.onrender.com)**，输入组长单独提供的团队口令，即可在手机或电脑体验。网站和模拟账本托管在云端，正常更新、休眠和重启不需要换网址。不要在 GitHub 公布口令，也不要输入真实银行资料。团队 AI 每天合计最多 20 次调用，DeepSeek 费用不包含在免费托管内。
 
 这不是下方的 `localhost` 地址，也不是 GitHub 仓库地址。[云部署说明](docs/development/CLOUD_DEPLOYMENT.md)。旧 `trycloudflare.com` 链接仅为临时试用，请改用上述固定网址。平台免费额度、休眠及网络条件仍会影响可用性，不承诺永久免费或始终秒开。
 

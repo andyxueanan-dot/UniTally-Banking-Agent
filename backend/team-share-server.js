@@ -24,7 +24,8 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
   const app = express();
   app.disable('x-powered-by');
   const error = (res, status, code, message) => res.status(status).json({ code, message });
-  app.get('/healthz', (_req, res) => { try { if (persistent) store.read(); res.set('Cache-Control', 'no-store').json({ ok: true, service: 'unitally-team', storage: persistent ? 'postgres' : 'local', sandbox: true }); } catch { res.status(503).json({ ok: false }); } });
+  app.get('/healthz', (_req, res) => { try { if (persistent) store.read(); res.set('Cache-Control', 'no-store').json({ ok: true, service: 'unitally-team', product: 'FinPilot', storage: persistent ? 'postgres' : 'local', sandbox: true,
+    release: /^[a-f0-9]{40}$/.test(process.env.RENDER_GIT_COMMIT || '') ? process.env.RENDER_GIT_COMMIT : 'local', features: { calendarVersion: 1, feedback: true, compatiblePlanner: true } }); } catch { res.status(503).json({ ok: false }); } });
   app.use((req, res, next) => {
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'same-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), publickey-credentials-create=(), publickey-credentials-get=()',
@@ -40,7 +41,7 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
     for (const [key, expiry] of sessions) if (expiry <= now()) sessions.delete(key);
     next();
   });
-  const loginPage = (failed = false) => `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>UniTally · 团队体验</title><style>body{margin:0;background:#edf0e7;color:#303b2b;font:17px system-ui;display:grid;min-height:100dvh;place-items:center}main{margin:24px;padding:30px;max-width:420px;background:white;border-radius:24px;box-shadow:0 12px 50px #303b2b15}p{line-height:1.8;color:#66715c}input,button{box-sizing:border-box;width:100%;padding:16px;margin:12px 0;border:1px solid #ccd2c4;border-radius:12px;font:inherit}button{background:#33452d;color:white;cursor:pointer}.warn{color:#a65e21}label{display:block}</style><main><small>UniTally / TEAM PREVIEW</small><h1>欢迎来体验</h1><p>请输入组长提供的团队口令。这里是比赛原型，账户和资金全部为模拟；请勿填写真实银行卡号、身份证或密码。</p>${failed ? '<p role="alert" class="warn">口令不正确，请重新输入。</p>' : ''}<form action="/team/login" method="post"><label for="password">团队访问口令</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required><button>进入演示</button></form><p>AI 对话会发送给 DeepSeek。团队共享每日最多 ${maxDailyCalls} 次 AI 调用；页面内验证码不是短信验证。链接临时有效，电脑离线即不可用。</p></main></html>`;
+  const loginPage = (failed = false) => `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FinPilot · 团队体验</title><style>body{margin:0;background:#edf0e7;color:#303b2b;font:17px system-ui;display:grid;min-height:100dvh;place-items:center}main{margin:24px;padding:30px;max-width:420px;background:white;border-radius:24px;box-shadow:0 12px 50px #303b2b15}p{line-height:1.8;color:#66715c}input,button{box-sizing:border-box;width:100%;padding:16px;margin:12px 0;border:1px solid #ccd2c4;border-radius:12px;font:inherit}button{background:#33452d;color:white;cursor:pointer}.warn{color:#a65e21}label{display:block}</style><main><small>FinPilot / TEAM PREVIEW</small><h1>欢迎来体验</h1><p>请输入组长提供的团队口令。这里是比赛原型，账户和资金全部为模拟；请勿填写真实银行卡号、身份证或密码。</p>${failed ? '<p role="alert" class="warn">口令不正确，请重新输入。</p>' : ''}<form action="/team/login" method="post"><label for="password">团队访问口令</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required><button>进入演示</button></form><p>AI 对话会发送给后端配置的模型供应商。团队共享每日最多 ${maxDailyCalls} 次 AI 调用；页面内验证码不是短信验证。链接临时有效，电脑离线即不可用。</p></main></html>`;
   const renderLogin = failed => persistent ? loginPage(failed).replace('链接临时有效，电脑离线即不可用。', '固定云端地址，免费服务空闲后可能休眠，再次打开需等待唤醒。') : loginPage(failed);
   app.get('/team/login', (_req, res) => res.type('html').send(renderLogin()));
   app.post('/team/login', express.urlencoded({ extended: false, limit: '1kb' }), (req, res) => {
@@ -71,7 +72,7 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
     res.clearCookie(COOKIE, { secure: true, httpOnly: true, sameSite: 'lax', path: '/' });
     res.redirect(303, '/team/login');
   });
-  app.get('/team', (_req, res) => res.type('html').send('<!doctype html><meta charset="utf-8"><h1>UniTally 团队演示</h1><p>临时分享，仅模拟资金。</p><a href="/">返回演示</a><form method="post" action="/team/logout"><button>退出团队登录</button></form>'));
+  app.get('/team', (_req, res) => res.type('html').send('<!doctype html><meta charset="utf-8"><h1>FinPilot 团队演示</h1><p>临时分享，仅模拟资金。</p><a href="/">返回演示</a><form method="post" action="/team/logout"><button>退出团队登录</button></form>'));
   const bank = createBankApp({ store, planner, now, maxDailyCalls, limits: { maxSessions: 30, maxConcurrentPlans: 2 } });
   app.use((req, res, next) => {
     if (!req.path.startsWith('/api/')) return next();
