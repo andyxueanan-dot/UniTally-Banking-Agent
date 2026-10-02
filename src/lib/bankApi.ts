@@ -1,3 +1,5 @@
+import { bankApiUrl, bankSessionStorage } from './bankConnection';
+
 export type BankRisk = "green" | "yellow" | "red";
 export function passkeyLocalUrl(origin?: string) {
   if (!origin) return null;
@@ -323,10 +325,8 @@ export interface BankSandboxResponse {
   calculation: BankCalculation;
   state: BankState;
 }
-const TOKEN_KEY = "unitally.bank.demo.session.v1";
-export const storedBankToken = () => localStorage.getItem(TOKEN_KEY);
-export const saveBankToken = (token: string) =>
-  localStorage.setItem(TOKEN_KEY, token);
+export const storedBankToken = () => { const { storage, key } = bankSessionStorage(); return storage.getItem(key); };
+export const saveBankToken = (token: string) => { const { storage, key } = bankSessionStorage(); storage.setItem(key, token); };
 export class BankApiError extends Error {
   constructor(
     public code: string,
@@ -341,25 +341,30 @@ export async function bankRequest<T>(
   token?: string | null,
   body?: unknown,
 ): Promise<T> {
-  let response: Response;
+  let endpoint: string;
+  try { endpoint = bankApiUrl(route); }
+  catch (error) { throw new BankApiError('CONNECTION_NOT_CONFIGURED', error instanceof Error ? error.message : '后台未配置'); }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 65000);
   try {
-    response = await fetch(`/api/bank${route}`, {
+    const response = await fetch(endpoint, {
+      redirect: 'error',
       method: body === undefined ? "GET" : "POST",
       headers: {
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(65000),
+      signal: controller.signal,
     });
-  } catch {
+    const result = await response.json();
+    if (!response.ok) throw new BankApiError(result.code, result.message, result.state);
+    return result;
+  } catch (error) {
+    if (error instanceof BankApiError) throw error;
     throw new BankApiError(
       "NETWORK_ERROR",
-      "未能连接本机后台。若刚才在确认操作，请先刷新核对任务状态，不要重复新建转账。",
+      "未能连接银行测试后台。手机上的 localhost 不是电脑；请检查服务地址。若刚才在确认操作，请先核对任务状态，不要重复新建转账。",
     );
-  }
-  const result = await response.json();
-  if (!response.ok)
-    throw new BankApiError(result.code, result.message, result.state);
-  return result;
+  } finally { clearTimeout(timeout); }
 }

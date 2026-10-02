@@ -38,6 +38,9 @@ import {
   SlidersHorizontal,
   History,
   Grid2X2,
+  MessageSquareText,
+  UserRound,
+  ChevronLeft,
 } from "lucide-react";
 import {
   bankRequest,
@@ -57,6 +60,8 @@ import "./bank-agent.css";
 import BankServices, { type ManualAction } from "./bank/BankServices";
 import PasskeyPanel from "./bank/PasskeyPanel";
 import { passkeyLocalUrl } from "@/lib/bankApi";
+import { connectionDetails } from '@/lib/bankConnection';
+import MobileTransferSheet from '@/mobile/MobileTransferSheet';
 
 const money = (cents: number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
@@ -602,11 +607,15 @@ function TransactionList({
   );
 }
 
-export default function BankAgent() {
+export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
+  const connection = connectionDetails();
+  const mobileHistory = useRef<string[]>([]);
+  const currentTab = useRef('overview');
   const [state, setState] = useState<BankState | null>(null);
   const [health, setHealth] = useState<BankHealth | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [tab, setTab] = useState("overview");
+  const [transferOpen, setTransferOpen] = useState(false);
   const [mode, setMode] = useState<"ai" | "offline">(() =>
     localStorage.getItem(MODE_KEY) === "offline" ? "offline" : "ai",
   );
@@ -726,6 +735,8 @@ export default function BankAgent() {
       });
       applyState(result.state);
       setHealth(await bankRequest<BankHealth>("/health"));
+      if (mobile && result.message?.results?.some(r => r.type === 'proposal')) { setTaskFilter('active'); go('audit'); }
+      return result.message?.results?.some(r => r.type === 'proposal');
     } catch (e) {
       handleError(e);
       if (mode === "ai") setInput(text);
@@ -760,6 +771,7 @@ export default function BankAgent() {
           { response, confirmed: true },
         );
         applyState(result.state);
+        if (mobile && result.task?.status === 'SUCCEEDED') setTaskFilter('done');
         return;
       }
       const result = await bankRequest<
@@ -767,6 +779,7 @@ export default function BankAgent() {
       >(`/tasks/${task.id}/${action}`, token, body);
       if (result.state) applyState(result.state);
       else if (token) applyState(await bankRequest<BankState>("/state", token));
+      if (mobile && result.task?.status === 'SUCCEEDED') setTaskFilter('done');
       return result;
     } catch (e) {
       handleError(e);
@@ -834,6 +847,8 @@ export default function BankAgent() {
             ?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
         50,
       );
+      if (mobile && result.message?.results?.some(r => r.type === 'proposal')) { setTaskFilter('active'); go('audit'); }
+      return result.message?.results?.some(r => r.type === 'proposal');
     } catch (e) {
       handleError(e);
     } finally {
@@ -1007,17 +1022,43 @@ export default function BankAgent() {
     cards: "卡片的控制权，始终在你。",
     services: "金融琐事，一站办得明白。",
     audit: "每个决定，都有迹可循。",
+    assistant: '说说你想办什么。',
+    profile: '我的演示空间',
   };
-  const go = (value: string) => {
+  const go = useCallback((value: string) => {
+    if (mobile && currentTab.current !== value) mobileHistory.current.push(currentTab.current);
+    currentTab.current = value;
     setTab(value);
-    if (window.innerWidth < 800)
+    if (mobile || window.innerWidth < 800)
       window.scrollTo({ top: 0, behavior: "instant" });
-  };
+  }, [mobile]);
+  const back = useCallback(() => {
+    if (transferOpen) { setTransferOpen(false); return; }
+    if (modal) { setModal(null); return; }
+    const previous = mobileHistory.current.pop() || 'overview';
+    currentTab.current = previous; setTab(previous); window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [modal, transferOpen]);
+  useEffect(() => {
+    if (!mobile) return;
+    const nativeBack = (event: Event) => {
+      if (!modal && !transferOpen && currentTab.current === 'overview' && !mobileHistory.current.length) return;
+      event.preventDefault(); back();
+    };
+    window.addEventListener('bank-mobile-back', nativeBack);
+    return () => window.removeEventListener('bank-mobile-back', nativeBack);
+  }, [mobile, back, modal, transferOpen]);
+  useEffect(() => {
+    if (!mobile || !token) return;
+    const resume = () => { void bankRequest<BankState>('/state', token).then(applyState).catch(handleError); };
+    window.addEventListener('bank-mobile-resume', resume);
+    return () => window.removeEventListener('bank-mobile-resume', resume);
+  }, [mobile, token, applyState, handleError]);
   const monthsLabel = state?.referenceMonth
     ? `${state.referenceMonth.replace("-", " 年 ")} 月`
     : "本月";
   return (
-    <div className="ba-root">
+    <div className={`ba-root ${mobile ? `bm-app bm-tab-${tab}` : ''}`}>
+      {mobile && <header className="bm-header"><div>{tab !== 'overview' ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : <span className="bm-brand"><Landmark size={20} /></span>}<strong>{({overview:'UniTally',assistant:'AI 助手',audit:'待办与回执',profile:'我的',bills:'账单明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
       <aside className="ba-sidebar">
         <a className="ba-logo" href="/bank-agent" aria-label="UniTally 首页">
           <span className="ba-logo-mark">
@@ -1120,6 +1161,7 @@ export default function BankAgent() {
           </div>
         </header>
         <main className="ba-main">
+          {mobile && tab === 'overview' && <section className="bm-welcome"><span>YOUR EVERYDAY BANKING COMPANION</span><h1>你好，今天想办什么？</h1><p>说清需求，核对详情，再放心确认。</p><button className="bm-ask" onClick={() => go('assistant')}><Sparkles size={21} /><span>向 UniTally 说一句话</span><ArrowRight size={19} /></button><div className="bm-shortcuts">{[{title:'转一笔钱',icon:ArrowUpRight,action:()=>setTransferOpen(true)},{title:'查账单',icon:ReceiptText,action:()=>go('bills')},{title:'管卡片',icon:CreditCard,action:()=>go('cards')},{title:'更多服务',icon:Grid2X2,action:()=>go('services')}].map(item=><button key={item.title} onClick={item.action} disabled={busy||!state}><span><item.icon size={22} /></span>{item.title}</button>)}</div></section>}
           <section className="ba-intro">
             <div>
               <div className="ba-eyebrow">
@@ -1151,7 +1193,7 @@ export default function BankAgent() {
               <p>
                 {loading
                   ? "正在加载你的独立演示账户…"
-                  : "请先启动本机服务，然后重试。"}
+                  : connection.ready ? "请先启动银行测试服务，然后重试。" : connection.message}
               </p>
               <button className="ba-secondary" onClick={load}>
                 重新连接
@@ -1201,6 +1243,7 @@ export default function BankAgent() {
                 <button
                   className="ba-pending-stat"
                   onClick={() => {
+                    if (mobile) { setTaskFilter('active'); go('audit'); return; }
                     if (pending.length && tab !== "audit")
                       document
                         .getElementById("bank-active-tasks")
@@ -1229,11 +1272,11 @@ export default function BankAgent() {
                 <div className="ba-left-content">
                   {tab === "services" && (
                     <>
-                      <PasskeyPanel
+                      {!connection.native && <PasskeyPanel
                         auth={state.auth}
                         busy={busy}
                         onRegister={registerDevice}
-                      />
+                      />}
                       <BankServices
                         state={state}
                         busy={busy}
@@ -1246,6 +1289,7 @@ export default function BankAgent() {
                       />
                     </>
                   )}
+                  {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">U</div><h2>我的演示账户</h2><p>虚构数据，不关联真实银行卡。</p><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => go('services')}><Grid2X2 size={19} />服务与安全设置<ChevronRight size={17}/></button><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
                   {tab === "overview" && (
                     <>
                       <section className="ba-panel ba-spending-panel">
@@ -1911,6 +1955,8 @@ export default function BankAgent() {
           )}
         </main>
       </div>
+      {mobile && <nav className="bm-bottom-nav" aria-label="手机主导航">{[{id:'overview',title:'首页',icon:LayoutDashboard},{id:'assistant',title:'助手',icon:MessageSquareText},{id:'audit',title:'待办',icon:ShieldCheck},{id:'profile',title:'我的',icon:UserRound}].map(item=><button key={item.id} aria-label={item.title} aria-current={tab===item.id?'page':undefined} className={tab===item.id?'active':''} onClick={()=>{if(item.id==='audit')setTaskFilter('active');go(item.id);}}><span><item.icon size={22}/>{item.id==='audit' && pending.length>0 && <b>{pending.length}</b>}</span><small>{item.title}</small></button>)}</nav>}
+      {mobile && <MobileTransferSheet open={transferOpen} onOpenChange={setTransferOpen} state={state} busy={busy} onPrepare={prepareManual} />}
       <Dialog.Root
         open={modal !== null}
         onOpenChange={(open) => {

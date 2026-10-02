@@ -4,6 +4,8 @@
 
 ## 当前银行原型
 
+- [手机端入口与 Android 工程说明](development/MOBILE_APP.md)
+
 - [开发者安装与历史记录](development/BANK_AGENT_DEMO.md)
 - [质量迭代、功能覆盖与限制](development/BANK_QUALITY_PROGRESS.md)
 - [安全自评开发稿](development/BANK_SECURITY_REVIEW.md)

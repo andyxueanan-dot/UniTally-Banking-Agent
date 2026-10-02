@@ -9,6 +9,12 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-mobile/
+android/.gradle/
+android/local.properties
+android/**/build/
+*.jks
+*.keystore
 dist-ssr
 *.local
 

@@ -68,7 +68,7 @@ function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk,
   // The standalone bank service must never fall back into the legacy login/Firebase app.
   app.get(['/', '/index.html'], (_req, res) => res.redirect(302, '/bank-agent'));
   app.use(express.static(dist));
-  app.get('/bank-agent', (_req, res) => fs.existsSync(path.join(dist, 'index.html')) ? res.sendFile(path.join(dist, 'index.html')) : res.status(503).send('Please run npm run build first.'));
+  app.get(['/bank-agent', '/mobile'], (_req, res) => fs.existsSync(path.join(dist, 'index.html')) ? res.sendFile(path.join(dist, 'index.html')) : res.status(503).send('Please run npm run build first.'));
   app.use((err, _req, res, _next) => {
     const status = err.status || (err.code?.startsWith('AI_') || err.code === 'INVALID_AI_PLAN' ? 503 : 500);
     res.status(status).json({ code: err.code || 'INTERNAL_ERROR', message: status === 500 ? '后台暂时出错，没有生成成功回执。请刷新查询状态。' : err.message });
