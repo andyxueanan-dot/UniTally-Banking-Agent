@@ -117,9 +117,15 @@ export interface BankBusiness {
     lockDays: number;
     description: string;
   }[];
-  questionnaire: string[];
+  questionnaire: { version: string; source: { name: string; version: string; url: string }; wording: string; questions: { id: string; section: string; prompt: string; note: string; options: { value: string; label: string }[] }[] };
   riskProfile: {
-    answers: number[];
+    answers: (number | string)[];
+    current: boolean;
+    reason: string | null;
+    riskLabel: string;
+    expiresAt?: number;
+    questionnaireVersion?: string;
+    noInvestmentExperience?: boolean;
     riskLevel: number;
     acceptsLoss: boolean;
     horizonDays: number;
@@ -197,6 +203,7 @@ export interface BankMessage {
   };
 }
 export interface BankState {
+  accountPolicy?: { accountClass: string; label: string; cardKind: string; creditLimit: number | null; outDailyLimit: number | null; outAnnualLimit: number | null; balanceCap: number | null; outgoing: {daily:number;annual:number}; incoming: {daily:number;annual:number}; wealthAllowed:boolean; scope:string; note:string };
   feedbackCount?: number;
   advanced?: BankAdvanced;
   auth?: { mode: "demo_otp" | "passkey"; canRegister: boolean; origin: string };

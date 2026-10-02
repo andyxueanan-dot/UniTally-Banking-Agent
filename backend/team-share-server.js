@@ -25,7 +25,7 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
   app.disable('x-powered-by');
   const error = (res, status, code, message) => res.status(status).json({ code, message });
   app.get('/healthz', (_req, res) => { try { if (persistent) store.read(); res.set('Cache-Control', 'no-store').json({ ok: true, service: 'unitally-team', product: 'FinPilot', storage: persistent ? 'postgres' : 'local', sandbox: true,
-    release: /^[a-f0-9]{40}$/.test(process.env.RENDER_GIT_COMMIT || '') ? process.env.RENDER_GIT_COMMIT : 'local', features: { calendarVersion: 1, feedback: true, compatiblePlanner: true } }); } catch { res.status(503).json({ ok: false }); } });
+    release: /^[a-f0-9]{40}$/.test(process.env.RENDER_GIT_COMMIT || '') ? process.env.RENDER_GIT_COMMIT : 'local', features: { calendarVersion: 1, feedback: true, compatiblePlanner: true, riskQuestionnaire: 'suzhou-v202308-finp-v1' } }); } catch { res.status(503).json({ ok: false }); } });
   app.use((req, res, next) => {
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'same-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), publickey-credentials-create=(), publickey-credentials-get=()',

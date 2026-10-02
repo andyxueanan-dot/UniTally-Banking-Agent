@@ -1,0 +1,8 @@
+import type { BankState } from '@/lib/bankApi';
+const money=(v:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency:'CNY'}).format(v/100);
+export default function AccountPolicyPanel({state}:{state:BankState}){const p=state.accountPolicy;if(!p)return null;
+ return <section className="ba-panel ba-account-policy" aria-label="账户规则与办理边界"><div className="ba-panel-heading"><h2>账户规则与办理边界</h2><span>{p.label}</span></div>
+ <dl><div><dt>账户资金</dt><dd>借记账户 · 自有模拟余额 · 不可透支</dd></div><div><dt>可用余额</dt><dd>{money(state.available)}</dd></div><div><dt>信用额度</dt><dd>不适用；信用意向申请不等于授信</dd></div><div><dt>今日已用出金</dt><dd>{money(p.outgoing.daily)}{p.outDailyLimit!==null?` / ${money(p.outDailyLimit)}`:' · 未设统一分类上限'}</dd></div><div><dt>本年已用出金</dt><dd>{money(p.outgoing.annual)}{p.outAnnualLimit!==null?` / ${money(p.outAnnualLimit)}`:''}</dd></div>{p.balanceCap!==null&&<div><dt>余额上限</dt><dd>{money(p.balanceCap)}</dd></div>}<div><dt>理财申购资格</dt><dd>{p.wealthAllowed?'仍须通过测评匹配和资金检查':'此类演示账户不开放'}</dd></div></dl>
+ <p className="ba-service-caption">{p.scope}</p><details><summary>验证、限额和审批有什么区别？</summary><ul><li>验证用于核对授权；即使验证通过，余额、账户类别和交易限额仍须满足。</li><li>消费限额只是允许花费的上限，不会增加余额或信用额度。</li><li>信用业务意向只进入待审核记录；AI不能批准授信。</li><li>网页演示验证码不是真短信或人脸验证。公网暂未开放设备验证，不能声称银行级强认证。</li><li>借记卡用存款；信用卡用授信额度并需还款。当前未模拟信用卡账单和还款，不把借记卡冒充信用卡。</li></ul><p>{p.note}</p><a href="https://www.beijing.gov.cn/zhengce/zhengcefagui/201905/t20190522_60762.html" target="_blank" rel="noreferrer">账户分类参考：银发〔2018〕16号</a><br/><a href="https://pic.bankofchina.com/bocappd/pbservice/202601/P020260109615510106614.pdf" target="_blank" rel="noreferrer">Ⅰ／Ⅱ／Ⅲ类账户使用口径参考：中行公开协议（2025年版）</a></details>
+ </section>;
+}

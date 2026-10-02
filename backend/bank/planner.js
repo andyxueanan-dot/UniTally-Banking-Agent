@@ -1,6 +1,7 @@
 const ACTIONS = ['balance', 'analyze', 'transactions', 'cards', 'transfer', 'freeze_card', 'unfreeze_card', 'card_limit', 'cancel_task'];
 const { PERIODS } = require('./analytics');
 const { DAY_KEYS } = require('./calendar');
+const { VERSION: QUESTIONNAIRE_VERSION, validAnswers } = require('./risk-questionnaire');
 const { BUSINESS_TYPES } = require('./business');
 ACTIONS.push(...BUSINESS_TYPES);
 const { ADVANCED_TYPES } = require('./advanced-payments');
@@ -23,11 +24,11 @@ const BUSINESS_SYSTEM = `
 还支持下列全部为虚构数据的扩展业务；绝不当作真实银行服务或投顾：
 subscription_query=查看订阅（后台会要求黄色确认），cancel_subscription需要subscriptionId（sub-music云音乐、sub-cloud云盘；sub-video只是疑似不可取消）和scope=bank_mandate撤销银行代扣或merchant_membership取消商户会员。用户只说"取消"且范围不清须追问，不能默认两个都取消。
 wealth_catalog=虚构理财目录与比较，wealth_positions=持仓/收益查询；没有真实行情不能编造收益。
-risk_assessment需要用户明确给出的3个answers整数0/1/2（承受损失、资金期限、经验），不能代填。没有答案先说明需回答三个教学问题，不声称专业测评。
-wealth_buy需要productId及amount（demo-flex灵活计划、demo-term7七日计划、demo-term30三十日计划）；wealth_redeem需要明确positionId及amount，未指定持仓先wealth_positions查询，不能发明ID。
+risk_assessment为本人在表单中完成的11题模拟测评，参考苏州银行V.202308。不要用旧3题、不要代选或根据聊天猜答案；引导用户到“更多服务→模拟理财”逐题作答并确认。不能承诺测评通过或提高等级。
+wealth_buy需要productId及amount（demo-flex灵活计划、demo-term7七日计划、demo-term30三十日计划）；availableDays仅在用户明确提供此笔资金可不用天数时填写，不能推测。wealth_redeem需要明确positionId及amount，未指定持仓先wealth_positions查询，不能发明ID。
 apply_virtual_card=申请模拟虚拟卡（无真实支付卡号）。temporary_lock_card/unlock_card=临时锁定/解除，区别freeze_card/unfreeze_card挂失/解挂，都需要cardLast4。
 card_restriction需要cardLast4、channel online线上或overseas境外、enabled布尔：true允许，false禁止；没有明确禁止哪个渠道不要猜。
-card_credit_request=申请授信额度，cardLast4与amount；只申请待审核，不保证批准。card_limit是银行卡每日消费限额，不是信用授信。
+card_credit_request=以现有借记账户提交独立信用业务意向，cardLast4与amount；只生成待人工审核记录，不保证批准，不把借记卡改成信用卡。card_limit是银行卡每日消费限额，不是信用授信。账户分类限制由后台检查，验证通过也不意味着可以越过业务限制。
 多项有明确顺序的业务可返回最多3个有序actions，后台生成依赖工作流，每项敏感业务仍单独确认；不能因用户要求批量而绕过权限。
 `;
 const ADVANCED_SYSTEM = `
@@ -55,7 +56,8 @@ const TOOL = {
           subscriptionId: { type: ['string', 'null'] },
           scope: { type: 'string', enum: ['bank_mandate', 'merchant_membership'] },
           productId: { type: ['string', 'null'] }, positionId: { type: ['string', 'null'] },
-          answers: { type: 'array', items: { type: 'integer', minimum: 0, maximum: 2 }, minItems: 3, maxItems: 3 },
+          answers: { type: 'array', items: { type: 'string', enum: ['A','B','C','D','E'] }, minItems: 11, maxItems: 11 },
+          questionnaireVersion: { type: 'string', enum: [QUESTIONNAIRE_VERSION] }, availableDays: { type: 'integer', minimum: 0, maximum: 3650 },
           channel: { type: 'string', enum: ['online', 'overseas'] }, enabled: { type: 'boolean' },
           participants: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 }, includeSelf: { type: 'boolean' },
           executeAt: { type: ['string', 'null'] }, scheduleId: { type: ['string', 'null'] },
@@ -74,7 +76,7 @@ function validatePlan(value) {
   if (!value || typeof value !== 'object' || !Array.isArray(value.actions) || value.actions.length > 3 ||
       typeof value.question !== 'string' || value.question.length > 500) throw new PlannerError('INVALID_AI_PLAN', '模型没有返回有效的业务计划，请换一种说法。');
   for (const a of value.actions) {
-    if (!a || !ACTIONS.includes(a.type) || Object.keys(a).some(k => !['type', 'recipient', 'amount', 'reserveAmount', 'cardLast4', 'limit', 'period', 'relativeDateKey', 'localTime', 'category', 'merchant', 'subscriptionId', 'scope', 'productId', 'positionId', 'answers', 'channel', 'enabled', 'participants', 'includeSelf', 'executeAt', 'scheduleId', 'label', 'eventAt', 'budgetId', 'deliveryAt', 'orderId'].includes(k)))
+    if (!a || !ACTIONS.includes(a.type) || Object.keys(a).some(k => !['type', 'recipient', 'amount', 'reserveAmount', 'cardLast4', 'limit', 'period', 'relativeDateKey', 'localTime', 'category', 'merchant', 'subscriptionId', 'scope', 'productId', 'positionId', 'answers', 'questionnaireVersion', 'availableDays', 'channel', 'enabled', 'participants', 'includeSelf', 'executeAt', 'scheduleId', 'label', 'eventAt', 'budgetId', 'deliveryAt', 'orderId'].includes(k)))
       throw new PlannerError('INVALID_AI_PLAN', '模型计划包含未获准的操作，已拦截。');
     for (const k of ['recipient', 'amount', 'reserveAmount', 'cardLast4', 'limit', 'category', 'merchant', 'subscriptionId', 'productId', 'positionId', 'scope', 'channel', 'executeAt', 'scheduleId', 'label', 'eventAt', 'budgetId', 'deliveryAt', 'orderId']) {
       if (a[k] !== undefined && a[k] !== null && (typeof a[k] !== 'string' || a[k].length > 80))
@@ -83,7 +85,8 @@ function validatePlan(value) {
     if (a.period && !PERIODS.includes(a.period)) throw new PlannerError('INVALID_AI_PLAN', '不支持该账单期间。');
     if (a.relativeDateKey !== undefined && !DAY_KEYS.includes(a.relativeDateKey) || a.localTime !== undefined && (typeof a.localTime !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(a.localTime))) throw new PlannerError('INVALID_AI_PLAN', '相对日期或时分参数无效。');
     if (a.category && !['餐饮', '购物', '交通', '订阅', '学习', '转账'].includes(a.category)) throw new PlannerError('INVALID_AI_PLAN', '不支持该账单分类，请补充说明。');
-    if (a.answers !== undefined && (!Array.isArray(a.answers) || a.answers.length !== 3 || a.answers.some(n => !Number.isInteger(n) || n < 0 || n > 2))) throw new PlannerError('INVALID_AI_PLAN', '风险问卷答案格式无效。');
+    if (a.answers !== undefined && !validAnswers(a.answers)) throw new PlannerError('INVALID_AI_PLAN', '风险问卷答案格式无效，请本人完成新版11题。');
+    if (a.questionnaireVersion !== undefined && a.questionnaireVersion !== QUESTIONNAIRE_VERSION || a.availableDays !== undefined && (!Number.isInteger(a.availableDays) || a.availableDays < 0 || a.availableDays > 3650)) throw new PlannerError('INVALID_AI_PLAN', '问卷版本或资金期限无效。');
     if (a.enabled !== undefined && typeof a.enabled !== 'boolean') throw new PlannerError('INVALID_AI_PLAN', '交易限制参数格式无效。');
     if (a.includeSelf !== undefined && typeof a.includeSelf !== 'boolean') throw new PlannerError('INVALID_AI_PLAN', 'AA是否包含本人必须明确。');
     if (a.participants !== undefined && (!Array.isArray(a.participants) || a.participants.length < 1 || a.participants.length > 10 || a.participants.some(p => typeof p !== 'string' || p.length > 80))) throw new PlannerError('INVALID_AI_PLAN', 'AA参与人参数无效。');
@@ -160,7 +163,7 @@ const DEMOS = {
   cancel_music_membership: { actions: [{ type: 'cancel_subscription', subscriptionId: 'sub-music', scope: 'merchant_membership' }], question: '' },
   wealth_catalog: { actions: [{ type: 'wealth_catalog' }], question: '' },
   wealth_positions: { actions: [{ type: 'wealth_positions' }], question: '' },
-  risk_assessment: { actions: [{ type: 'risk_assessment', answers: [1, 1, 1] }], question: '' },
+  risk_assessment: { actions: [], question: '请到模拟理财页面本人完成11题问卷；固定案例不会代你作答。' },
   wealth_buy: { actions: [{ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }], question: '' },
   virtual_card: { actions: [{ type: 'apply_virtual_card' }], question: '' },
   lock_card: { actions: [{ type: 'temporary_lock_card', cardLast4: '8806' }], question: '' },

@@ -1,3 +1,4 @@
+const riskFixture = require('./risk-fixtures.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { BankService } = require('../bank/service');
@@ -54,7 +55,7 @@ test('subscription query is yellow, cancellation is scope-specific, no AI charge
 });
 test('wealth buy and redeem use red confirmation and maintain exact capital balance', async () => {
   const f = fixture(); await f.manual({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }); assert.equal(f.state().tasks.length, 0);
-  await f.manual({ type: 'risk_assessment', answers: [1, 1, 1] }); f.confirm();
+  await f.manual({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.MID }); f.confirm();
   await f.manual({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }); const buy = f.task(); assert.equal(buy.risk, 'red');
   assert.equal(f.service.confirm(f.token, buy.id, { confirmed: true }).error.code, 'VERIFICATION_REQUIRED'); f.confirm();
   assert.equal(f.state().balance, 1276000); const pos = f.state().business.positions[0]; assert.equal(pos.principalCents, 10000);

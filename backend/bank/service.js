@@ -11,6 +11,7 @@ const { ADVANCED_TYPES, publicAdvancedState, heldCents, prepareAdvanced, execute
 const { plannerContext } = require('./planner-context');
 const { runWasmCalculation } = require('./code-sandbox');
 const { enforceTemporalPlan } = require('./calendar');
+const { TYPES: ACCOUNT_TYPES, publicAccountPolicy, checkAccountAction, checkAccountBalance } = require('./account-policy');
 const { validateCardPurchase, prepareCardPurchase, executeCardPurchase } = require('./card-payment');
 const id = () => randomBytes(12).toString('hex');
 const tokenKey = token => createHash('sha256').update(token).digest('hex');
@@ -55,7 +56,7 @@ function publicTask(t, now) {
 function view(s, now) {
   return { serverNow: now, intentVersion: s.intentVersion || 0, referenceMonth: monthKey(now), balance: s.balance, available: available(s), dailyTransferred: daily(s, now),
     auth: { mode: s.passkeyCredential ? 'passkey' : 'demo_otp', canRegister: !s.passkeyCredential, origin: s.passkeyOrigin || 'http://localhost:5091' },
-    contacts: s.contacts.map(({ balance, ...c }) => c), cards: s.cards, transactions: s.transactions,
+    contacts: s.contacts.map(({ balance, ...c }) => c), cards: s.cards.map(c => ({ ...c, kind: 'DEBIT' })), accountPolicy: publicAccountPolicy(s,now), transactions: s.transactions,
     tasks: s.tasks.map(t => publicTask(t, now)).reverse(), audit: s.audit.slice(-120).reverse(),
     history: s.history.slice(-40), feedbackCount: (s.plannerFeedback || []).length, workflows: s.workflows || [], business: publicBusinessState(s, now), advanced: publicAdvancedState(s, now), lockedUntil: s.lockedUntil, ledger: s.ledger.slice(-50), sandbox: true };
 }
@@ -75,14 +76,15 @@ class BankService {
     s.passkeyOrigin = this.passkey.origin;
     return s;
   }
-  create() {
+  create(options = {}) {
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(k => k !== 'accountClass') || options.accountClass !== undefined && !Object.hasOwn(ACCOUNT_TYPES, options.accountClass)) fail('INVALID_ACCOUNT_CLASS','只可选择Ⅰ、Ⅱ、Ⅲ类演示账户，不能指定余额或跳过开户核验。');
     const token = randomBytes(32).toString('hex'); const now = this.now();
     const state = this.store.transact(db => {
       if (Object.keys(db.sessions).length >= this.limits.maxSessions) fail('SESSION_LIMIT', '本机演示会话数量已达上限；请继续使用已有会话，历史记录不会被自动删除。', 429);
       const recent = (db.sessionCreates || []).filter(at => at > now - 60000);
       if (recent.length >= this.limits.sessionCreatesPerMinute) fail('SESSION_RATE_LIMIT', '创建演示账户过于频繁，请一分钟后重试。', 429);
       db.sessionCreates = [...recent, now];
-      const s = seedSession(now); s.intentVersion = 0; s.commandCount = 0; s.recentCommands = []; s.passkeyOrigin = this.passkey.origin;
+      const s = seedSession(now); s.accountProfile = { accountClass: options.accountClass || 'I', sandbox: true }; if (options.accountClass === 'III') { s.balance = 150000; s.cards = s.cards.map(c => ({ ...c, virtual:true, name:`电子支付入口 ${c.last4}` })); } s.intentVersion = 0; s.commandCount = 0; s.recentCommands = []; s.passkeyOrigin = this.passkey.origin;
       audit(s, 'SESSION_CREATED', '创建独立虚构账户；没有接入真实银行。', now); db.sessions[tokenKey(token)] = s; return view(s, now);
     });
     return { token, state };
@@ -186,6 +188,7 @@ class BankService {
       }
       if (!['simulate_aa_payment', 'card_purchase'].includes(manualAction?.type)) validatePlan(plan);
       if (!manualAction && !demo) plan = enforceTemporalPlan(plan, text, planningNow, this.now());
+      if (!manualAction && plan.actions.some(a => a.type === 'risk_assessment')) plan = { ...plan, actions: [], question: '风险问卷必须由本人在模拟理财表单逐题选择并确认；AI不代填，也不自动提高风险等级。' };
       if (plan.actions.some(a => a.type === 'transfer' && !a.reserveAmount) && /保留|留够|留出|预留|至少.{0,8}(?:剩|留)|(?:剩|留).{0,8}至少|keep.{0,20}(?:balance|remaining)|reserve/i.test(normalized(text))) {
         plan.actions = []; plan.question = '你提出了转账后的保留余额条件，但尚未明确提取出最低保留金额。请明确人民币转账金额与转账后至少保留多少元；不会忽略这个条件。';
       }
@@ -283,6 +286,7 @@ class BankService {
   }
   prepare(s, a, now, simulateTimeout, admitted = {}) {
     const businessTools = { cents, money, available, fail, id, audit };
+    if (['wealth_buy','card_credit_request'].includes(a.type)) checkAccountAction(s,a,now,fail);
     if (['due_schedule', 'merchant_catalog'].includes(a.type)) {
       const read = prepareAdvanced(s, a, now, businessTools).returnResult;
       audit(s, 'READ_ADVANCED', `${a.type}：查询本地模拟计划或固定虚构报价。`, now); return read;
@@ -354,6 +358,7 @@ class BankService {
       action = { type: a.type, cardId: card.id, cardLast4: card.last4, expectedStatus: card.status, ...(a.type === 'card_limit' ? { cents: cents(a.limit) } : {}) };
       title = `${a.type === 'freeze_card' ? '挂失冻结' : a.type === 'unfreeze_card' ? '解挂恢复' : '调整消费限额'} · ${card.name} ${card.last4}${action.cents ? ` → ${money(action.cents)}` : ''}`;
     } else fail('UNSUPPORTED_ACTION', '该操作不在白名单中。');
+    checkAccountAction(s,action,now,fail);
     const task = { id: id(), title, action, intentVersion: s.intentVersion || 0, status: 'AWAITING_CONFIRMATION', risk: level(s, action, now), createdAt: now, expiresAt: now + 10 * 60_000,
       fault: simulateTimeout && action.type === 'transfer' ? 'timeout' : null,
       steps: [{ label: '理解需求', state: 'done' }, { label: '校验账户与权限', state: 'done' }, { label: '等待用户确认', state: 'current' }, { label: '执行并核对回执', state: 'waiting' }] };
@@ -420,6 +425,7 @@ class BankService {
     delete t.challenge; delete t.passkeyPending;
     t.verificationMethod = t.risk === 'red' ? authentication : 'explicit_confirmation';
     audit(s, 'USER_CONFIRMED', `用户确认不可变任务 ${t.id}；权限 ${t.risk}；${authentication === 'passkey' ? '已核验绑定此任务的 WebAuthn 公钥签名；仍为虚构账户' : '演示身份机制/普通明确确认'}。`, now, t.id);
+    checkAccountAction(s,t.action,now,fail,t.id);
     t.executionDay = day(now);
     if (t.fault === 'timeout') {
       t.status = 'PENDING_REVIEW'; t.steps[2].state = 'done'; t.steps[3] = { label: '接口超时，等待模拟后台对账', state: 'current' };
@@ -545,6 +551,7 @@ class BankService {
   }
   execute(s, t, now) {
     const a = t.action;
+    checkAccountAction(s,a,now,fail,t.id);
     if (a.type === 'card_purchase') {
       t.result = executeCardPurchase(s, t, now, { cents, money, available, fail, id, audit });
     } else if (ADVANCED_TYPES.includes(a.type)) {
@@ -567,6 +574,7 @@ class BankService {
       if (a.type === 'card_limit') card.limit = a.cents;
       else card.status = a.type === 'freeze_card' ? 'FROZEN' : 'ACTIVE';
     }
+    checkAccountBalance(s,fail);
     t.status = 'SUCCEEDED'; t.completedAt = now;
     t.receipt = { id: `RCPT-${t.id.slice(0, 10).toUpperCase()}`, at: now, summary: t.title, balanceAfter: s.balance, sandbox: true };
     t.steps = t.steps.map(step => ({ ...step, state: 'done' })); t.steps[3].label = '执行完成，回执已核对';

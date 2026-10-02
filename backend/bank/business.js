@@ -8,16 +8,12 @@ const BUSINESS_TYPES = Object.freeze([
 const YELLOW = new Set(['subscription_query', 'cancel_subscription', 'risk_assessment', 'apply_virtual_card']);
 const READ_ONLY = new Set(['wealth_catalog', 'wealth_positions']);
 const DAY = 86400000;
+const riskQuestionnaire = require('./risk-questionnaire');
 const DISCLAIMER = '全部为虚构教学产品和模拟资金，不提供真实投资建议，不保证任何收益。';
 const PRODUCTS = Object.freeze([
   Object.freeze({ id: 'demo-flex', name: '演示灵活计划', riskLevel: 1, minCents: 10000, lockDays: 0, description: '模拟低风险档；无锁定期，仅记录本金，不保证保本或收益。' }),
-  Object.freeze({ id: 'demo-term7', name: '演示七日计划', riskLevel: 2, minCents: 50000, lockDays: 7, description: '模拟中风险档；买入后满7×24小时才可赎回，只模拟本金。' }),
-  Object.freeze({ id: 'demo-term30', name: '演示三十日计划', riskLevel: 3, minCents: 100000, lockDays: 30, description: '模拟高风险档；买入后满30×24小时才可赎回，只模拟本金。' }),
-]);
-const QUESTIONS = Object.freeze([
-  '本次虚构练习中，能否接受本金损失？0=不能，1=少量，2=较多。',
-  '这笔虚构资金多久内会用到？0=随时，1=至少7天后，2=至少30天后。',
-  '对波动产品的了解程度？0=不了解，1=有所了解，2=了解风险。',
+  Object.freeze({ id: 'demo-term7', name: '演示七日计划', riskLevel: 2, minCents: 50000, lockDays: 7, description: '演示指定R2中低风险；买入后满7×24小时才可赎回，只模拟本金，并非银行真实评级。' }),
+  Object.freeze({ id: 'demo-term30', name: '演示三十日计划', riskLevel: 3, minCents: 100000, lockDays: 30, description: '演示指定R3中风险；买入后满30×24小时才可赎回，只模拟本金，并非银行真实评级。' }),
 ]);
 
 function dayKey(now) { return new Date(now + 8 * 3600000).toISOString().slice(0, 10); }
@@ -55,8 +51,7 @@ function ensureBusinessState(s, now) {
         !Number.isSafeInteger(sub.expectedCents) || sub.expectedCents <= 0 || !Number.isInteger(sub.billingDay) || sub.billingDay < 1 || sub.billingDay > 31) ||
       b.positions.some(position => !position || typeof position.id !== 'string' || !Number.isSafeInteger(position.principalCents) || position.principalCents < 0 ||
         !Number.isFinite(position.unlockAt) || !Number.isSafeInteger(position.revision) || position.revision < 0) ||
-      (b.riskProfile !== null && (!b.riskProfile || !Number.isSafeInteger(b.riskProfile.revision) || b.riskProfile.revision < 1 ||
-        !Array.isArray(b.riskProfile.answers) || b.riskProfile.answers.length !== 3 || b.riskProfile.answers.some(value => !Number.isInteger(value) || value < 0 || value > 2)))) {
+      !riskQuestionnaire.validStoredProfile(b.riskProfile)) {
     throw Object.assign(new Error('业务演示状态不受支持，已停止操作，不会自动重置。'), { code: 'BUSINESS_STATE_INVALID', status: 503 });
   }
   return b;
@@ -87,7 +82,7 @@ function publicBusinessState(s, now) {
   return { sandbox: true, disclaimer: DISCLAIMER, subscriptionsAuthorized: b.subscriptionsApprovedAt !== null,
     subscriptions: b.subscriptionsApprovedAt !== null ? subscriptionsView(s, now) : [],
     subscriptionNotice: b.subscriptionsApprovedAt !== null ? '已明确确认查询本演示账户的订阅信息。' : '按赛题黄色权限要求，先确认订阅查询才显示列表。',
-    products: clone(PRODUCTS), questionnaire: [...QUESTIONS], riskProfile: clone(b.riskProfile),
+    products: clone(PRODUCTS), questionnaire: riskQuestionnaire.publicQuestionnaire(), riskProfile: riskQuestionnaire.publicProfile(b.riskProfile, now),
     positions: clone(b.positions), principalTotal: b.positions.reduce((total, position) => total + position.principalCents, 0),
     returns: null, returnsNote: '本演示无净值或市场行情，不计算、不承诺投资收益。',
     cardControls: clone(b.cardControls), creditApplications: clone(b.creditApplications) };
@@ -111,14 +106,7 @@ function assertCardOperation(card, type, tools) {
   } else if (card.status !== 'ACTIVE') reject(tools, 'CARD_NOT_ACTIVE', '卡片不是正常状态，不能执行这项操作。');
 }
 function scoreAnswers(answers, tools) {
-  if (!Array.isArray(answers) || answers.length !== 3 || answers.some(value => !Number.isInteger(value) || value < 0 || value > 2))
-    reject(tools, 'INVALID_RISK_ANSWERS', '请回答三个教学问题，每个答案只能是整数0、1或2；不能代用户猜测。');
-  const score = answers.reduce((a, b) => a + b, 0);
-  // Do not let high scores in one dimension erase a stated loss-tolerance or
-  // liquidity constraint. This is a transparent teaching rule, not a validated
-  // suitability model or regulated investment assessment.
-  return { score, riskLevel: Math.min(...answers) + 1, acceptsLoss: answers[0] > 0,
-    horizonDays: [0, 7, 30][answers[1]], method: '教学保守规则：三个维度取最低档；不能承受损失时不申购不保本产品。' };
+  try { return riskQuestionnaire.scoreRisk(answers); } catch (e) { return reject(tools,e.code || 'INVALID_RISK_ANSWERS',e.message); }
 }
 function checkWealthInvariant(s, tools) {
   const b = s.business;
@@ -132,7 +120,7 @@ function prepareBusiness(s, a, now, tools) {
   if (!BUSINESS_TYPES.includes(a.type)) reject(tools, 'UNSUPPORTED_ACTION', '该业务不在白名单中。');
   const b = ensureBusinessState(s, now); let action = { type: a.type }; let title;
   if (a.type === 'wealth_catalog') return { returnResult: { type: 'wealth_catalog', risk: 'green', products: clone(PRODUCTS),
-    questionnaire: [...QUESTIONS], text: `${DISCLAIMER}\n${PRODUCTS.map(p => `${p.name}（${p.id}）：风险${p.riskLevel}档，起购${tools.money(p.minCents)}，锁定${p.lockDays}天。${p.description}`).join('\n')}` } };
+    questionnaire: riskQuestionnaire.publicQuestionnaire(), text: `${DISCLAIMER}\n${PRODUCTS.map(p => `${p.name}（${p.id}）：演示R${p.riskLevel}，起购${tools.money(p.minCents)}，锁定${p.lockDays}天。${p.description}`).join('\n')}` } };
   if (a.type === 'wealth_positions') {
     checkWealthInvariant(s, tools);
     return { returnResult: { type: 'wealth_positions', risk: 'green', positions: clone(b.positions), principalTotal: b.clearingBalance,
@@ -149,20 +137,24 @@ function prepareBusiness(s, a, now, tools) {
     action = { ...action, subscriptionId: sub.id, scope: a.scope, expectedRevision: sub.revision };
     title = `${a.scope === 'bank_mandate' ? '撤销银行代扣授权（不终止会员）' : '终止模拟商户会员（不替代撤销银行授权）'} · ${sub.merchant}`;
   } else if (a.type === 'risk_assessment') {
+    if (a.questionnaireVersion !== riskQuestionnaire.VERSION) reject(tools,'QUESTIONNAIRE_VERSION_REQUIRED','请打开最新版11题问卷，旧测评和不明版本不能用于本次申购。');
     scoreAnswers(a.answers, tools); action = { ...action, answers: [...a.answers], expectedRevision: b.riskProfile?.revision || 0 };
-    title = `记录教学风险问卷答案 ${a.answers.join('/')}（非正式适当性评估、非投资建议）`;
+    action.questionnaireVersion = riskQuestionnaire.VERSION;
+    title = `确认11题模拟风险测评 · 参考苏州银行V.202308 · 答案 ${a.answers.join('/')}（非银行正式评估）`;
   } else if (a.type === 'wealth_buy') {
     const product = productById(a.productId, tools); const amount = tools.cents(a.amount);
     checkWealthInvariant(s, tools);
-    if (!b.riskProfile) reject(tools, 'RISK_ASSESSMENT_REQUIRED', '请先完成并确认三个问题的教学风险问卷，不能代你选择风险档。');
-    const profile = scoreAnswers(b.riskProfile.answers, tools);
-    if (!profile.acceptsLoss || profile.riskLevel < product.riskLevel || profile.horizonDays < product.lockDays)
-      reject(tools, 'RISK_MISMATCH', '产品与已确认问卷的损失承受能力、风险档或资金期限不适配；没有产品保证保本，已阻止申购。');
+    if (!riskQuestionnaire.profileStatus(b.riskProfile,now).current) reject(tools, 'RISK_ASSESSMENT_REQUIRED', '请先完成并确认新版11题测评；旧版或已过期结果不能用于新申购。');
+    const profile = { ...scoreAnswers(b.riskProfile.answers, tools), answers: b.riskProfile.answers };
+    const days = riskQuestionnaire.purchaseDays(profile,a.availableDays,tools.fail);
+    if (!profile.acceptsLoss || profile.riskLevel < product.riskLevel)
+      reject(tools, 'RISK_MISMATCH', '产品与已确认问卷的损失意愿或C/R等级不适配；非保本模拟产品已被拦截，不会用总分覆盖关键回答。');
+    if (days < product.lockDays) reject(tools,'RISK_MISMATCH','资金可锁定天数不足；“一年以下”不能自动解释为可锁定7天或30天。');
     if (amount < product.minCents) reject(tools, 'BELOW_MINIMUM', `该虚构产品起购金额为 ${tools.money(product.minCents)}。`);
     if (amount > tools.available(s)) reject(tools, 'INSUFFICIENT_FUNDS', '可用余额不足，不能占用其他任务预留资金。');
     if (b.positions.length >= 100) reject(tools, 'POSITION_LIMIT', '本演示持仓记录已达上限，不会删除历史记录。', 429);
-    action = { ...action, productId: product.id, cents: amount, expectedRiskRevision: b.riskProfile.revision };
-    title = `模拟申购 ${product.name} ${tools.money(amount)}，风险${product.riskLevel}档，锁定${product.lockDays}天；不保证收益`;
+    action = { ...action, productId: product.id, cents: amount, expectedRiskRevision: b.riskProfile.revision, ...(a.availableDays !== undefined ? { availableDays: a.availableDays } : {}) };
+    title = `模拟申购 ${product.name} ${tools.money(amount)}，演示R${product.riskLevel}，锁定${product.lockDays}天${a.availableDays !== undefined ? `；你确认资金至少可不用${a.availableDays}天` : ''}；不保证收益`;
   } else if (a.type === 'wealth_redeem') {
     const position = b.positions.find(item => item.id === a.positionId); const amount = tools.cents(a.amount);
     checkWealthInvariant(s, tools);
@@ -186,7 +178,7 @@ function prepareBusiness(s, a, now, tools) {
     } else if (a.type === 'card_credit_request') {
       if (b.creditApplications.length >= 100) reject(tools, 'CREDIT_REQUEST_LIMIT', '演示额度申请记录已达上限。', 429);
       action.cents = tools.cents(a.amount);
-      title = `提交尾号${card.last4}的模拟信用额度申请 ${tools.money(action.cents)}（待审核，不直接授信、不增加余额）`;
+      title = `以尾号${card.last4}账户提交独立信用业务意向 ${tools.money(action.cents)}（借记卡本身无信用额度；仅待人工审核，不增加余额或消费限额）`;
     } else title = `${a.type === 'temporary_lock_card' ? '临时锁定' : '解除临时锁定'} · 尾号${card.last4}（不是挂失/解挂）`;
   }
   return { action, title, risk: YELLOW.has(a.type) ? 'yellow' : 'red' };
@@ -221,14 +213,16 @@ function executeBusiness(s, task, now, tools) {
     sub[field] = 'CANCELLED'; sub.revision += 1;
     result = { type: a.type, subscriptionId: sub.id, scope: a.scope, text: a.scope === 'bank_mandate' ? `已撤销${sub.merchant}的模拟银行代扣授权；商户会员未被取消，请另外联系/操作商户。历史扣费不会退款。` : `已终止${sub.merchant}的模拟商户会员；未替代银行代扣授权撤销，不声称银行授权同时取消。历史扣费不会退款。` };
   } else if (a.type === 'risk_assessment') {
+    if (a.questionnaireVersion !== riskQuestionnaire.VERSION) reject(tools,'QUESTIONNAIRE_VERSION_REQUIRED','旧问卷草案已失效，请重新填写新版问卷。',409);
     const scored = scoreAnswers(a.answers, tools);
     if ((db.riskProfile?.revision || 0) !== a.expectedRevision) reject(tools, 'RISK_PROFILE_CHANGED', '教学风险问卷已经更新，请重新确认。', 409);
-    db.riskProfile = { answers: [...a.answers], ...scored, assessedAt: now, revision: a.expectedRevision + 1, teachingOnly: true, disclaimer: '仅虚构教学问卷，不是正式适当性评估或投资建议。' };
-    result = { type: a.type, profile: clone(db.riskProfile), text: `已记录教学问卷，模拟风险档为${scored.riskLevel}/3。${db.riskProfile.disclaimer}` };
+    db.riskProfile = { answers: [...a.answers], ...scored, questionnaireVersion: riskQuestionnaire.VERSION, source: { ...riskQuestionnaire.SOURCE }, assessedAt: now, expiresAt: now + 365 * DAY, revision: a.expectedRevision + 1, teachingOnly: true,
+      disclaimer: '仅参考苏州银行公开计分的独立模拟测评，非该行认证、非正式适当性评估。FinPilot另核验损失意愿与交易资金期限。' };
+    result = { type: a.type, profile: riskQuestionnaire.publicProfile(db.riskProfile,now), text: `模拟测评已确认：${scored.riskLabel}。${!scored.acceptsLoss ? '你的回答体现不希望本金损失，当前非保本模拟产品仍不可申购。' : ''}${db.riskProfile.disclaimer}` };
   } else if (a.type === 'wealth_buy') {
     const product = productById(a.productId, tools); integer(a.cents, tools); checkWealthInvariant(draft, tools);
-    const profile = db.riskProfile && scoreAnswers(db.riskProfile.answers, tools);
-    if (!profile || db.riskProfile.revision !== a.expectedRiskRevision || !profile.acceptsLoss || profile.riskLevel < product.riskLevel || profile.horizonDays < product.lockDays)
+    const profile = riskQuestionnaire.profileStatus(db.riskProfile,now).current ? { ...scoreAnswers(db.riskProfile.answers, tools), answers: db.riskProfile.answers } : null;
+    if (!profile || db.riskProfile.revision !== a.expectedRiskRevision || !profile.acceptsLoss || profile.riskLevel < product.riskLevel || riskQuestionnaire.purchaseDays(profile,a.availableDays,tools.fail) < product.lockDays)
       reject(tools, 'RISK_PROFILE_CHANGED', '已确认问卷发生变化或不适配该产品，未申购。', 409);
     if (a.cents < product.minCents) reject(tools, 'BELOW_MINIMUM', '申购低于虚构产品起购金额。');
     if (a.cents > tools.available(draft)) reject(tools, 'INSUFFICIENT_FUNDS', '可用资金已变化，不能使用其他任务的预留金额。');
@@ -273,7 +267,7 @@ function executeBusiness(s, task, now, tools) {
       if (db.creditApplications.length >= 100) reject(tools, 'CREDIT_REQUEST_LIMIT', '模拟额度申请记录已达上限。', 429);
       const application = { id: `CREDIT-${tools.id()}`, cardId: card.id, cardLast4: card.last4, requestedLimitCents: a.cents, createdAt: now, status: 'PENDING_REVIEW', sandbox: true };
       db.creditApplications.push(application);
-      result = { type: a.type, application: clone(application), text: `模拟额度申请已记录，状态为待审核；未授信、未增加余额，也未修改原消费限额。没有连接真实银行审核。` };
+      result = { type: a.type, application: clone(application), text: `独立信用业务意向已记录为待人工审核；当前仍是不可透支的借记账户，没有授信、增加余额或修改消费限额，也没有真人银行审核接入。` };
     }
   }
   checkWealthInvariant(draft, tools);

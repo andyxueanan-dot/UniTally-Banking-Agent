@@ -23,6 +23,7 @@ require('../backend/node_modules/dotenv').config({ path: path.join(root, 'backen
 const { createDeepSeekPlanner } = require('../backend/bank/planner');
 const { BankService } = require('../backend/bank/service');
 const { createBankStore } = require('../backend/bank/store');
+const riskFixture = require('../backend/test/risk-fixtures.cjs');
 const native = createDeepSeekPlanner({ apiKey: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL || 'deepseek-chat' });
 const report = { run, classification: dataset.classification, harnessVersion: 3, workflowNote: 'Harness explicitly clicks advance when workflow is READY; this is not autonomous continuation.', startedAt: new Date().toISOString(), cases: [],
   dataset: path.basename(datasetPath), datasetHash: createHash('sha256').update(fs.readFileSync(datasetPath)).digest('hex'),
@@ -50,7 +51,7 @@ try {
     const assertions = []; const check = (name, pass) => assertions.push({ name, passed: Boolean(pass) });
     const started = performance.now();
     try {
-      if (['risk','position'].includes(sample.setup)) await setup({ type: 'risk_assessment', answers: [1,1,1] });
+      if (['risk','position'].includes(sample.setup)) await setup({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.MID });
       if (sample.setup === 'position') { await setup({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }); input = input.replace('{positionId}', service.get(token).business.positions[0].id); }
       if (sample.setup === 'pending') await service.chat(token, { text: '给王明转200元', demo: 'transfer' });
       const before = service.get(token);

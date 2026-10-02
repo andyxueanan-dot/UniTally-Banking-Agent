@@ -626,6 +626,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [modal, setModal] = useState<"reset" | "guide" | null>(null);
+  const [newAccountClass,setNewAccountClass] = useState('I');
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [period, setPeriod] = useState("all");
@@ -935,7 +936,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
       const next = await bankRequest<{ token: string; state: BankState }>(
         "/sessions",
         null,
-        {},
+        { accountClass: newAccountClass },
       );
       saveBankToken(next.token);
       setToken(next.token);
@@ -2008,6 +2009,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
             </Dialog.Description>
             {modal === "reset" ? (
               <div className="ba-modal-actions">
+                <label>演示账户类型<select aria-label="演示账户类型" value={newAccountClass} onChange={e => setNewAccountClass(e.target.value)}><option value="I">Ⅰ类 · 默认演示</option><option value="II">Ⅱ类 · 分类限额演示</option><option value="III">Ⅲ类 · 1500元初始余额</option></select><small>只建立独立虚构场景，不是真实开户，也不会转换或删除旧账户。</small></label>
                 <button className="ba-secondary" onClick={exportAudit}>
                   先导出当前记录
                 </button>

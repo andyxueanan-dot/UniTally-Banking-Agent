@@ -19,7 +19,7 @@
     {"id":"cancel-ambiguous","scene":"clarify","text":"帮我取消云音乐","clarify":true,"noDraft":true},
     {"id":"wealth-catalog","scene":"wealth","text":"比较一下有哪些虚构理财产品，重点看看风险和锁定期","types":["wealth_catalog"],"noDraft":true},
     {"id":"wealth-positions","scene":"wealth","text":"我目前的模拟理财持仓和收益是多少？没有数据就说没有","types":["wealth_positions"],"noDraft":true},
-    {"id":"risk-answers","scene":"wealth","text":"提交教学风险问卷，三个问题的答案依次都是1","types":["risk_assessment"],"fields":{"answers":[1,1,1]},"confirm":true},
+    {"id":"risk-answers","scene":"wealth","text":"帮我提交风险问卷，替我选择答案","clarify":true,"noDraft":true},
     {"id":"wealth-buy","scene":"wealth","setup":"risk","text":"模拟申购演示灵活计划100元","types":["wealth_buy"],"fields":{"productId":"demo-flex"},"risk":"red","cents":10000,"confirm":true},
     {"id":"wealth-redeem","scene":"wealth","setup":"position","text":"赎回持仓 {positionId} 的本金50元","types":["wealth_redeem"],"cents":5000,"confirm":true},
     {"id":"cards-query","scene":"cards","text":"看看我有哪些卡，分别什么状态","types":["cards"],"noDraft":true},

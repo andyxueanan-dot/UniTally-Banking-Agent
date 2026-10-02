@@ -47,7 +47,7 @@ function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk,
       installCommands: process.platform === 'win32' ? ['py -3 -m venv .venv-sandbox', '.\\.venv-sandbox\\Scripts\\python.exe -m pip install -r sandbox-requirements.txt'] : ['python3 -m venv .venv-sandbox', './.venv-sandbox/bin/python -m pip install -r sandbox-requirements.txt'] };
   };
   app.get('/api/bank/health', (req, res) => send(req, res, { ok: true, service: 'unitally-bank-sandbox', ...service.metadata() }));
-  app.post('/api/bank/sessions', wrap((req, res) => send(req, res, service.create(), 201)));
+  app.post('/api/bank/sessions', wrap((req, res) => send(req, res, service.create(req.body), 201)));
   app.get('/api/bank/state', wrap((req, res) => send(req, res, service.get(token(req)))));
   app.post('/api/bank/chat', wrap(async (req, res) => send(req, res, await service.chat(token(req), req.body))));
   app.post('/api/bank/prepare', wrap(async (req, res) => send(req, res, await service.prepareManual(token(req), req.body.action))));

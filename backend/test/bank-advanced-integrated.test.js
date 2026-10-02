@@ -1,3 +1,4 @@
+const riskFixture = require('./risk-fixtures.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { BankService } = require('../bank/service');
@@ -54,7 +55,7 @@ test('formatted fake phone resolves locally while unknown private numbers stay b
   await assert.rejects(f.service.chat(f.token, { text: '给13800138000转200元' }), { code: 'PRIVATE_DATA_BLOCKED' });
 });
 test('opaque local IDs with long decimal runs are not mistaken for real account data in manual mode', async () => {
-  const f = fixture(); await f.manual({ type: 'risk_assessment', answers: [1, 1, 1] }); f.confirm();
+  const f = fixture(); await f.manual({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.MID }); f.confirm();
   await f.manual({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }); f.confirm();
   const fixedId = 'POS-123456789012abcdef123456';
   f.store.transact(db => { Object.values(db.sessions)[0].business.positions[0].id = fixedId; });

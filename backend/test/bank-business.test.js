@@ -1,3 +1,4 @@
+const riskFixture = require('./risk-fixtures.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { seedSession } = require('../bank/seed');
@@ -24,7 +25,7 @@ function fixture() {
   }
   function execute(t) { return executeBusiness(s, t, clock, tools); }
   return { s, tools, prepare, task, execute, run: a => execute(task(a)), now: () => clock, tick: ms => clock += ms,
-    highRisk: () => execute(task({ type: 'risk_assessment', answers: [2, 2, 2] })) };
+    highRisk: () => execute(task({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.HIGH })) };
 }
 
 test('business defaults leave legacy seed balances, cards and transactions unchanged', () => {
@@ -82,25 +83,25 @@ test('wealth catalogue is green, bounded and does not invent returns', () => {
   assert.equal(r.risk, 'green'); assert.equal(r.products.length, 3); assert.match(r.text, /不保证/); assert.deepEqual(f.s, before);
   assert.equal(publicBusinessState(f.s, f.now()).returns, null);
 });
-test('risk questionnaire requires three explicit integer responses, is yellow and teaching-only', () => {
+test('risk questionnaire requires eleven explicit valid letter responses, is yellow and teaching-only', () => {
   const f = fixture();
   for (const answers of [null, [], [0, 1], [0, 1, 2, 0], ['0', 1, 2], [0, 1.5, 2], [-1, 1, 2], [0, 1, 3]]) {
-    assert.throws(() => f.prepare({ type: 'risk_assessment', answers }), { code: 'INVALID_RISK_ANSWERS' });
+    assert.throws(() => f.prepare({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers }), { code: 'INVALID_RISK_ANSWERS' });
   }
-  const t = f.task({ type: 'risk_assessment', answers: [0, 0, 0] }); assert.equal(t.risk, 'yellow'); assert.equal(f.s.business.riskProfile, null);
+  const t = f.task({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.LOW }); assert.equal(t.risk, 'yellow'); assert.equal(f.s.business.riskProfile, null);
   const result = f.execute(t); assert.equal(result.profile.riskLevel, 1); assert.equal(result.profile.teachingOnly, true); assert.match(result.text, /非|不是/);
 });
 test('risk profile changes invalidate earlier assessment and buy drafts', () => {
   const f = fixture(); f.highRisk();
-  const staleAssessment = f.task({ type: 'risk_assessment', answers: [2, 2, 2] });
+  const staleAssessment = f.task({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.HIGH });
   const buy = f.task({ type: 'wealth_buy', productId: 'demo-term7', amount: '500' });
-  f.run({ type: 'risk_assessment', answers: [0, 0, 0] }); const before = structuredClone(f.s);
+  f.run({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.LOW }); const before = structuredClone(f.s);
   assert.throws(() => f.execute(staleAssessment), { code: 'RISK_PROFILE_CHANGED' });
   assert.throws(() => f.execute(buy), { code: 'RISK_PROFILE_CHANGED' }); assert.deepEqual(f.s, before);
 });
 test('wealth buy rejects missing assessment, mismatch, unknown product, minimum and bad amount', () => {
   const f = fixture(); assert.throws(() => f.prepare({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }), { code: 'RISK_ASSESSMENT_REQUIRED' });
-  f.run({ type: 'risk_assessment', answers: [0, 0, 0] });
+  f.run({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.LOW });
   assert.throws(() => f.prepare({ type: 'wealth_buy', productId: 'demo-term30', amount: '1000' }), { code: 'RISK_MISMATCH' });
   assert.throws(() => f.prepare({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }), { code: 'RISK_MISMATCH' });
   f.highRisk();
@@ -118,9 +119,9 @@ test('red wealth buy conserves money across owner, principal position, clearing 
   assert.equal(t.status, 'AWAITING_CONFIRMATION', 'service, not extension, owns final receipt/status'); assert.equal(t.receipt, undefined);
 });
 test('questionnaire cannot average away unwillingness to lose principal or short liquidity needs', () => {
-  const f = fixture(); f.run({ type: 'risk_assessment', answers: [0, 2, 2] });
+  const f = fixture(); f.run({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.NO_LOSS });
   assert.throws(() => f.prepare({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }), { code: 'RISK_MISMATCH' });
-  f.run({ type: 'risk_assessment', answers: [2, 0, 2] });
+  f.run({ type: 'risk_assessment', questionnaireVersion: riskFixture.VERSION, answers: riskFixture.SHORT });
   assert.equal(f.s.business.riskProfile.horizonDays, 0);
   assert.throws(() => f.prepare({ type: 'wealth_buy', productId: 'demo-term7', amount: '500' }), { code: 'RISK_MISMATCH' });
   assert.equal(f.prepare({ type: 'wealth_buy', productId: 'demo-flex', amount: '100' }).risk, 'red');

@@ -23,6 +23,8 @@ import type {
 import BankAdvancedServices from "./BankAdvancedServices";
 import BankCodeSandbox from "./BankCodeSandbox";
 import CardPaymentDemo from './CardPaymentDemo';
+import RiskQuestionnaire from './RiskQuestionnaire';
+import AccountPolicyPanel from './AccountPolicyPanel';
 
 const money = (cents: number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
@@ -222,7 +224,7 @@ export default function BankServices({
   ) => Promise<BankSandboxResponse | undefined>;
 }) {
   const [section, setSection] = useState(compact ? "" : "subscriptions");
-  const [answers, setAnswers] = useState<(number | null)[]>([null, null, null]);
+  const [availableDays, setAvailableDays] = useState('');
   const [productId, setProductId] = useState("demo-flex");
   const [amount, setAmount] = useState("");
   const [redeem, setRedeem] = useState<Record<string, string>>({});
@@ -259,6 +261,7 @@ export default function BankServices({
             { id: "subscriptions", label: "订阅与代扣", icon: ReceiptText },
             { id: "wealth", label: "模拟理财", icon: Wallet },
             { id: "cards", label: "扩展卡服务", icon: CreditCard },
+            { id: "policy", label: "账户规则与风控", icon: ShieldCheck },
             { id: "workflow", label: "多步协作", icon: Network },
             { id: "life", label: "AA 与生活计划", icon: Clock3 },
             { id: "sandbox", label: "计算沙箱", icon: Braces },
@@ -275,6 +278,7 @@ export default function BankServices({
           ))}
         </div>
       </section>}
+      {section === "policy" && <AccountPolicyPanel state={state} />}
       {section === "sandbox" && (
         <BankCodeSandbox
           busy={busy}
@@ -423,7 +427,7 @@ export default function BankServices({
                   <div>
                     <strong>{product.name}</strong>
                     <span className="ba-pill yellow">
-                      风险 {product.riskLevel}/3
+                      演示 R{product.riskLevel}
                     </span>
                   </div>
                   <dl>
@@ -441,74 +445,7 @@ export default function BankServices({
               ))}
             </div>
           </section>
-          <section className="ba-panel">
-            <div className="ba-panel-heading">
-              <h2>三个教学问题，由你自己回答。</h2>
-              {b.riskProfile && (
-                <span>已确认风险档 {b.riskProfile.riskLevel}/3</span>
-              )}
-            </div>
-            <p className="ba-service-intro">
-              不是正式适当性评估或投资建议。系统不会代选答案；确认前不会保存为已完成问卷。
-            </p>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (answers.every((a) => a !== null))
-                  onPrepare({ type: "risk_assessment", answers });
-              }}
-            >
-              <div className="ba-risk-questions">
-                {b.questionnaire.map((question, i) => (
-                  <label key={question}>
-                    <span>
-                      {i + 1}. {question}
-                    </span>
-                    <select
-                      aria-label={`教学风险问题${i + 1}`}
-                      required
-                      value={answers[i] ?? ""}
-                      onChange={(e) =>
-                        setAnswers((current) =>
-                          current.map((a, j) =>
-                            j === i ? Number(e.target.value) : a,
-                          ),
-                        )
-                      }
-                    >
-                      <option value="" disabled>
-                        请选择你的答案，不默认代选
-                      </option>
-                      <option value="0">
-                        0 · {["不能接受损失", "随时需要使用", "不了解"][i]}
-                      </option>
-                      <option value="1">
-                        1 · {["可接受少量损失", "至少7天后使用", "有所了解"][i]}
-                      </option>
-                      <option value="2">
-                        2 ·{" "}
-                        {["可接受较多损失", "至少30天后使用", "了解风险"][i]}
-                      </option>
-                    </select>
-                  </label>
-                ))}
-              </div>
-              <button
-                className="ba-primary"
-                disabled={busy || answers.some((a) => a === null)}
-                type="submit"
-              >
-                准备提交问卷
-                <ArrowRight size={15} />
-              </button>
-            </form>
-            {b.riskProfile && (
-              <p className="ba-data-note">
-                已确认答案 {b.riskProfile.answers.join(" / ")}；资金期限{" "}
-                {b.riskProfile.horizonDays} 天。{b.riskProfile.disclaimer}
-              </p>
-            )}
-          </section>
+          <RiskQuestionnaire key={b.questionnaire.version} data={b.questionnaire} profile={b.riskProfile} busy={busy} onPrepare={onPrepare} />
           <section className="ba-panel">
             <div className="ba-panel-heading">
               <h2>准备一笔模拟申购</h2>
@@ -518,7 +455,7 @@ export default function BankServices({
               className="ba-service-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                onPrepare({ type: "wealth_buy", productId, amount });
+                onPrepare({ type: "wealth_buy", productId, amount, ...(availableDays !== '' ? { availableDays: Number(availableDays) } : {}) });
               }}
             >
               <label>
@@ -530,7 +467,7 @@ export default function BankServices({
                 >
                   {b.products.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} · 风险{p.riskLevel}档
+                      {p.name} · 演示 R{p.riskLevel}
                     </option>
                   ))}
                 </select>
@@ -547,15 +484,14 @@ export default function BankServices({
                   onChange={(e) => setAmount(e.target.value)}
                 />
               </label>
-              <button
-                className="ba-primary"
-                disabled={busy || !b.riskProfile || !amount}
-              >
+              <label>这笔资金至少可以不用多少天？（交易确认，不计入问卷分数）<select aria-label="资金可锁定天数" value={availableDays} onChange={e => setAvailableDays(e.target.value)}><option value="">按测评已明确的最低期限核验</option><option value="0">随时可能用到</option><option value="7">至少7天</option><option value="30">至少30天</option><option value="365">至少一年</option></select></label>
+              {state.accountPolicy?.wealthAllowed === false && <p className="ba-service-warning">此Ⅲ类演示账户不开放理财申购；测评通过也不能改变账户业务资格。</p>}
+              <button className="ba-primary" disabled={busy || !b.riskProfile?.current || !amount || state.accountPolicy?.wealthAllowed === false}>
                 准备申购
                 <ArrowRight size={15} />
               </button>
-              {!b.riskProfile && (
-                <small>先完成并确认上面的教学问卷，才可申请申购。</small>
+              {!b.riskProfile?.current && (
+                <small>先完成并确认有效的新版问卷，才可申请申购。</small>
               )}
             </form>
           </section>
@@ -739,13 +675,13 @@ export default function BankServices({
                     }}
                   >
                     <label className="ba-sr-only" htmlFor={`credit-${card.id}`}>
-                      申请信用额度
+                      独立信用业务意向
                     </label>
                     <input
                       id={`credit-${card.id}`}
                       aria-label={`申请信用额度 ${card.last4}`}
                       inputMode="decimal"
-                      placeholder="模拟申请额度（元）"
+                      placeholder="信用意向金额（非借记卡提额）"
                       required
                       value={creditAmounts[card.id] || ""}
                       onChange={(e) =>
@@ -763,11 +699,11 @@ export default function BankServices({
                         !creditAmounts[card.id]
                       }
                     >
-                      准备额度申请
+                      准备信用业务意向
                     </button>
                   </form>
                   <small>
-                    仅记录待审核申请，不会直接授信、增加余额或改变消费限额。
+                    当前是借记账户，无信用额度。这里只记录独立意向待审核，不会授信、增加余额或改变消费限额。
                   </small>
                 </article>
               );
