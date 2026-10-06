@@ -1,0 +1,94 @@
+{
+  "generatedAt": "2026-10-06T09:46:43.222Z",
+  "sites": {
+    "desktop": 69,
+    "mobile": 72
+  },
+  "mobile": {
+    "bodyPx": 16,
+    "lineHeight": 1.4,
+    "h1Px": 30,
+    "h2Px": 24,
+    "smallTextShare": 0,
+    "textColors": 4,
+    "boxesPerScreen": 2.5,
+    "nesting": 1,
+    "flatRadiusShare": 0.95,
+    "shadows": 0,
+    "saturatedBgShare": 0,
+    "whiteBodyShare": 0.4647887323943662,
+    "serifHeadingShare": 0.07142857142857142,
+    "accentSaturation": 1,
+    "accentLightness": 0.5245,
+    "neutralButtonShare": 0.7560975609756098
+  },
+  "desktop": {
+    "bodyPx": 16,
+    "lineHeight": 1.45,
+    "measurePx": 497,
+    "h1Px": 40,
+    "h1Ratio": 2.5
+  },
+  "topBodyFamilies": [
+    [
+      "-apple-system",
+      3
+    ],
+    [
+      "Helvetica",
+      2
+    ],
+    [
+      "Graphik",
+      2
+    ],
+    [
+      "PingFang SC",
+      2
+    ],
+    [
+      "Helvetica Neue",
+      2
+    ],
+    [
+      "RISD Sans",
+      1
+    ],
+    [
+      "Renens",
+      1
+    ],
+    [
+      "Source Sans 3",
+      1
+    ],
+    [
+      "new rail",
+      1
+    ],
+    [
+      "ExecutiveLight",
+      1
+    ],
+    [
+      "Friedl",
+      1
+    ],
+    [
+      "mad",
+      1
+    ],
+    [
+      "Bascule",
+      1
+    ],
+    [
+      "HelveticaNeueLTPro-Md",
+      1
+    ],
+    [
+      "sans-serif",
+      1
+    ]
+  ]
+}
