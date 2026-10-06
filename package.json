@@ -15,7 +15,10 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "mobile-v2:dev": "vite --config vite.mobile-v2.config.ts",
+    "mobile-v2:build": "vite build --config vite.mobile-v2.config.ts --mode mobile",
+    "mobile-v2:preview": "vite preview --config vite.mobile-v2.config.ts"
   },
   "dependencies": {
     "@capacitor/android": "8.5.2",

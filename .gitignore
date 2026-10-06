@@ -63,3 +63,6 @@ Thumbs.db
 *.iml
 .idea/
 .vscode/settings.json
+
+# V2 interface preview build output
+dist-mobile-v2/

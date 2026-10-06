@@ -10,6 +10,8 @@
 
 **给队友看的体验入口。不会写代码也可以使用，不需要看源码。**
 
+10 月 6 日更新：手机界面按设计参考库重做（白底、细线、无色块，正文 16px），说明见 [新版界面](docs/development/UI_V2_PREVIEW.md)，参考库见 `design/reference-library/`。
+
 10 月 2 日更新：手机界面已收简，模拟刷卡可实际验证卡片渠道限制；真实 AI 评测结果与未完成项见 [本轮进展](docs/development/QUALITY_ROUND_2026-10-02.md)。
 
 固定地址云部署配置见 [Render + Neon 部署说明](docs/development/CLOUD_DEPLOYMENT.md)。以组长提供的已验证线上地址为准；仓库存在部署代码不代表服务已经上线。

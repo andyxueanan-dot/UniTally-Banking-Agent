@@ -25,7 +25,7 @@ try {
     assert.equal((await state()).balance,1286000); assert.equal(await page.locator('.bm-welcome').isVisible(),true);
     assert.equal(await page.locator('.ba-assistant').isVisible(),false);
     assert.equal(await page.locator('.ba-spending-panel').count(),0);
-    assert.equal(await page.locator('.bm-recent>div').count(),3);
+    assert.equal(await page.locator('.v2-ledger li').count(),5);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false); await shot('01-home');
   });
   await check('chat entry shows only focused assistant, not desktop financial panels',async()=>{
