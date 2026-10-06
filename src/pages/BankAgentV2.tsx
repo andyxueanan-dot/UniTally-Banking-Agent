@@ -1079,7 +1079,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     : "本月";
   return (
     <div className={`ba-root v2 ${mobile ? `bm-app bm-tab-${tab}` : ''}`}>
-      {mobile && <header className="bm-header"><div>{tab !== 'overview' ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : <span className="bm-brand"><Landmark size={20} /></span>}<strong>{({overview:'FinPilot',assistant:'AI 助手',audit:'待办与回执',profile:'我的',bills:'账单明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
+      {mobile && <header className="bm-header"><div>{['bills', 'cards', 'services'].includes(tab) ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : null}<strong>{({overview:'FinPilot',assistant:'AI 助手',audit:'待办与回执',profile:'我的',bills:'账单明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
       <aside className="ba-sidebar">
         <a className="ba-logo" href="/bank-agent" aria-label="FinPilot 首页">
           <span className="ba-logo-mark">
@@ -1753,22 +1753,6 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                     </div>
                     <span className="ba-assistant-wordmark">F.</span>
                   </div>
-                  <div className="ba-mode-bar">
-                    <span>理解需求的方式</span>
-                    <select
-                      aria-label="理解需求的方式"
-                      value={mode}
-                      onChange={(e) =>
-                        setMode(e.target.value as "ai" | "offline")
-                      }
-                      disabled={busy}
-                    >
-                      <option value="ai" disabled={!health?.aiConfigured}>
-                        {health?.provider || 'AI'} AI
-                      </option>
-                      <option value="offline">离线演示（非 AI）</option>
-                    </select>
-                  </div>
                   </div>
                   <div className="ba-scenario-list" aria-label="快速开始">
                     {suggestions.map((s) => (
@@ -1885,7 +1869,25 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                         }
                       }}
                     />
-                    <div>
+                    <div className="v2-composer-bar">
+                    <select
+                      className="v2-mode-chip"
+                      aria-label="理解需求的方式"
+                      value={mode}
+                      onChange={(e) =>
+                        setMode(e.target.value as "ai" | "offline")
+                      }
+                      disabled={busy}
+                    >
+                      <option value="ai" disabled={!health?.aiConfigured}>
+                        {health?.provider || 'AI'} AI
+                      </option>
+                      <option value="offline">离线演示（非 AI）</option>
+                    </select>
+                      <small className="v2-composer-note">
+                        <LockKeyhole size={12} />
+                        只输入虚构信息，不填真实账号
+                      </small>
                       <button
                         aria-label="发送需求"
                         type="submit"
@@ -1894,10 +1896,6 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                         <Send size={18} />
                       </button>
                     </div>
-                    <small className="v2-composer-note">
-                      <LockKeyhole size={12} />
-                      只输入虚构信息，不填真实账号
-                    </small>
                   </form>
                   {state.lockedUntil > now && (
                     <div className="ba-locked" role="status">

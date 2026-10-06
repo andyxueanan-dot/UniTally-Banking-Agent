@@ -704,3 +704,20 @@ body:has(.ba-root.v2) { background: #fff; }
 .v2-composer-note { flex-basis: 100%; display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); margin-top: -2px; }
 .bm-tab-assistant .ba-welcome { margin: 8px 0 20px; }
 .bank-keyboard-open .bm-tab-assistant .v2-assistant-top { display: none; }
+
+/* ---------- Chat idiom: my messages on the right in a soft grey bubble, the assistant as plain text ---------- */
+.bm-tab-assistant .v2-assistant-top { display: none; }
+.bm-tab-assistant .ba-scenario-list { padding-top: 12px; }
+.ba-message.user { border-left: 0; padding-left: 0; display: flex; justify-content: flex-end; }
+.ba-message.user .v2-role { display: none; }
+.ba-message.user .ba-message-content { background: #f1f1ee; color: var(--ink); border-radius: 18px 18px 4px 18px; padding: 10px 15px; max-width: 85%; }
+.bm-tab-assistant .ba-composer { display: block; background: #f1f1ee; border: 0; border-radius: 20px; padding: 10px 12px 8px 16px; }
+.bm-tab-assistant .ba-composer:focus-within { border: 0; box-shadow: 0 0 0 1px var(--rule-2); }
+.bm-tab-assistant .ba-composer textarea { width: 100%; background: none; border: 0; min-height: 24px; max-height: 132px; padding: 4px 0; }
+.v2-composer-bar { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; }
+.ba-root select.v2-mode-chip { width: auto; min-height: 32px; padding: 4px 28px 4px 12px; font-size: 13px; line-height: 1.3; border: 1px solid var(--rule-2); border-radius: 16px; background: #fff; color: var(--ink); max-width: 190px; flex-shrink: 0; }
+.ba-root select.v2-mode-chip:focus { outline: 2px solid var(--ink); outline-offset: 1px; }
+.v2-composer-bar .v2-composer-note { flex: 1; margin: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: flex; }
+.v2-composer-bar button { width: 36px; height: 36px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
+.bm-tab-assistant .ba-composer > div { margin: 6px 0 0; flex: none; }
+@media (max-width: 360px) { .v2-composer-bar .v2-composer-note { display: none; } }
