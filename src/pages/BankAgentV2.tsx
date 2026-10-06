@@ -1737,6 +1737,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                   </div>
                 </div>
                 <section className="ba-assistant" aria-label="银行助手">
+                  <div className="v2-assistant-top">
                   <div className="ba-assistant-heading">
                     <span className="ba-assistant-avatar">
                       <Sparkles size={23} />
@@ -1767,6 +1768,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       </option>
                       <option value="offline">离线演示（非 AI）</option>
                     </select>
+                  </div>
                   </div>
                   <div className="ba-scenario-list" aria-label="快速开始">
                     {suggestions.map((s) => (
@@ -1857,14 +1859,19 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                     </label>
                     <textarea
                       id="bank-message"
-                      rows={2}
+                      rows={1}
                       maxLength={1000}
                       value={input}
-                      onChange={(e) => setInput(e.target.value)}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        // Grow with the text like a chat composer; the CSS caps the height.
+                        e.target.style.height = "auto";
+                        e.target.style.height = `${Math.min(e.target.scrollHeight, 132)}px`;
+                      }}
                       placeholder={
                         mode === "ai"
-                          ? "试着说：给王明转两百元，先让我确认…"
-                          : "离线模式不解析输入，请点击上方固定案例"
+                          ? "例如：给王明转两百元，先让我确认"
+                          : "离线模式：请点上方固定案例"
                       }
                       disabled={busy || mode === "offline"}
                       onKeyDown={(e) => {
@@ -1879,10 +1886,6 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       }}
                     />
                     <div>
-                      <span>
-                        <LockKeyhole size={12} />
-                        只输入虚构信息，不填真实账号
-                      </span>
                       <button
                         aria-label="发送需求"
                         type="submit"
@@ -1891,6 +1894,10 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                         <Send size={18} />
                       </button>
                     </div>
+                    <small className="v2-composer-note">
+                      <LockKeyhole size={12} />
+                      只输入虚构信息，不填真实账号
+                    </small>
                   </form>
                   {state.lockedUntil > now && (
                     <div className="ba-locked" role="status">

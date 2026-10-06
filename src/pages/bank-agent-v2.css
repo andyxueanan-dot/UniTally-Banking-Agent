@@ -676,3 +676,31 @@ body:has(.ba-root.v2) { background: #fff; }
   .ba-participants { grid-template-columns: 1fr; }
   .ba-merchant-products { grid-template-columns: 1fr; }
 }
+
+/* ---------- Assistant on phones: the conversation gets the screen ---------- */
+.bm-tab-assistant .ba-assistant { height: calc(var(--bank-viewport-height, 100dvh) - 128px); min-height: 360px; }
+.bm-tab-assistant .v2-assistant-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0 6px; border-bottom: 1px solid var(--rule); flex-shrink: 0; }
+.bm-tab-assistant .ba-assistant-heading { padding: 0; gap: 0; min-width: 0; }
+.bm-tab-assistant .ba-assistant-heading h2 { display: none; }
+.bm-tab-assistant .ba-assistant-heading small { margin: 0; font-size: 13px; white-space: nowrap; }
+.bm-tab-assistant .ba-mode-bar { padding: 0; border: 0; flex-shrink: 0; }
+.bm-tab-assistant .ba-mode-bar > span { display: none; }
+.bm-tab-assistant .ba-mode-bar select { min-height: 32px; padding: 2px 6px; font-size: 13px; max-width: 170px; border-color: var(--rule); }
+.bm-tab-assistant .ba-scenario-list { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0 2px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.bm-tab-assistant .ba-scenario-list::-webkit-scrollbar { display: none; }
+.bm-tab-assistant .ba-scenario { flex: 0 0 auto; min-height: 36px; padding: 0 12px; font-size: 13px !important; }
+.bm-tab-assistant .ba-test-cases { order: 1; border: 0; margin: 0; padding: 0; }
+.bm-tab-assistant .ba-test-cases summary { min-height: 32px; font-size: 13px; color: var(--ink-3); }
+.bm-tab-assistant .ba-test-cases[open] { max-height: none; overflow: visible; }
+.bm-tab-assistant .ba-test-cases > div { margin: 0 0 6px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.bm-tab-assistant .ba-test-cases button { flex: 0 0 auto; min-height: 36px; font-size: 13px; }
+.bm-tab-assistant .ba-test-cases p { display: none; }
+.bm-tab-assistant .ba-chat-body { order: 2; padding: 10px 0 12px; }
+.bm-tab-assistant .ba-locked { order: 3; }
+.bm-tab-assistant .ba-composer { order: 4; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 10px; padding: 8px 8px 8px 14px; }
+.bm-tab-assistant .ba-composer textarea { flex: 1 1 60%; min-height: 24px; max-height: 132px; padding: 4px 0; line-height: 1.5; overflow-y: auto; }
+.bm-tab-assistant .ba-composer > div { margin: 0; flex: 0 0 auto; }
+.bm-tab-assistant .ba-composer button { width: 36px; height: 36px; }
+.v2-composer-note { flex-basis: 100%; display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); margin-top: -2px; }
+.bm-tab-assistant .ba-welcome { margin: 8px 0 20px; }
+.bank-keyboard-open .bm-tab-assistant .v2-assistant-top { display: none; }
