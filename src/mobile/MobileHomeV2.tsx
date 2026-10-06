@@ -13,7 +13,15 @@ const incoming = (type: string) => ['investment_redeem', 'aa_receipt'].includes(
 export default function MobileHomeV2({ state, pending, busy, onNavigate, onTransfer }: {
   state: BankState; pending: number; busy: boolean; onNavigate: (tab: string) => void; onTransfer: () => void;
 }) {
-  const recent = [...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+  // The demo ledger is seeded with dates across the whole month, so some seeded rows carry a
+  // day later than today. Clamp those to today and break ties by creation order (backend
+  // appends new transactions), so a transfer made just now is the first row.
+  const todayKey = new Date((state.serverNow || Date.now()) + 8 * 3600_000).toISOString().slice(0, 10);
+  const recent = state.transactions
+    .map((t, i) => ({ t, i, key: t.date > todayKey ? todayKey : t.date }))
+    .sort((a, b) => b.key.localeCompare(a.key) || b.i - a.i)
+    .slice(0, 5)
+    .map(x => x.t);
   const balance = split(state.balance);
   const reserved = state.balance - state.available;
   const shortcuts = [
