@@ -1,4 +1,4 @@
 {
   "extends": "./tsconfig.app.json",
-  "include": ["mobile/entry.tsx", "src/mobile/**/*.ts", "src/mobile/MobileHomeV2.tsx", "src/pages/BankAgent.tsx", "src/pages/BankAgentV2.tsx", "src/lib/bankApi.ts", "src/vite-env.d.ts"]
+  "include": ["mobile/entry.tsx", "src/mobile/**/*.ts", "src/mobile/MobileHomeV2.tsx", "src/pages/BankAgent.tsx", "src/pages/BankAgentV2.tsx", "src/mobile/MobileHomeV3.tsx", "src/pages/BankAgentV3.tsx", "src/lib/bankApi.ts", "src/vite-env.d.ts"]
 }

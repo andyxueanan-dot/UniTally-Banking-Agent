@@ -25,9 +25,9 @@
 
 新版的数值不再凭经验，而是对照 `design/reference-library/`（72 个人类设计的公开页面在手机视口上的测量中位数）：正文 16px、没有 12px 以下的字、文字颜色 ≤4、底色不饱和、每屏盒子 ≤3、嵌套 1、圆角 ≤4px、无阴影、链接黑字下划线、强调色只用在极小面积。用同一脚本测首页：旧版 12px 正文、30% 的字小于 12px、8 种文字色、每屏 6 个盒子；修正后 14px 主体文字（段落正文 16px）、0% 小字、3 种文字色、每屏 0.9 个盒子。详见 `design/reference-library/README.md` 与 `summary.md`。
 
-## 10 月 7 日：V3 银行版副本（待审，未上线）
+## 10 月 7 日：V3 银行版（已审核，已替换为线上入口）
 
-队友反馈"不像银行"。按 `review-2026-10-07/bank-ui-research.md`（34 家银行官网测量）做了 V3 副本：`src/pages/BankAgentV3.tsx`、`src/mobile/MobileHomeV3.tsx`、`src/pages/bank-agent-v3.css`（`@import` V2 样式后只覆盖主色、顶栏细条、主按钮、宫格图标、问候/公告/页脚、回执分行、个人中心账户信息）。预览入口 `mobile-v2/` 现在渲染 V3；线上入口 `mobile/entry.tsx` 仍是 V2。审查材料与替换步骤见仓库上一级 `review-2026-10-07/README-v3.md` 和 `compare-v3.html`。
+队友反馈"不像银行"。按 `review-2026-10-07/bank-ui-research.md`（34 家银行官网测量）做了 V3 副本：`src/pages/BankAgentV3.tsx`、`src/mobile/MobileHomeV3.tsx`、`src/pages/bank-agent-v3.css`（`@import` V2 样式后只覆盖主色、顶栏细条、主按钮、宫格图标、问候/公告/页脚、回执分行、个人中心账户信息）。Andy 审核通过后，`mobile/entry.tsx` 与预览入口 `mobile-v2/` 都渲染 V3；V2 文件保留，回退只需把 `mobile/entry.tsx` 的引用改回 `BankAgentV2`。审查材料与替换步骤见仓库上一级 `review-2026-10-07/README-v3.md` 和 `compare-v3.html`。
 
 ## 本地怎么看
 

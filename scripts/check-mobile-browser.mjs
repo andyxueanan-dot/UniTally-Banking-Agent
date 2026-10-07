@@ -29,7 +29,7 @@ try {
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false); await shot('01-home');
   });
   await check('chat entry shows only focused assistant, not desktop financial panels',async()=>{
-    await page.getByRole('button',{name:'转一笔钱',exact:true}).click();
+    await page.getByRole('button',{name:'转账汇款',exact:true}).click();
     const dialog=page.getByRole('dialog');await dialog.waitFor();
     assert.equal(await dialog.getByRole('button',{name:'下一步：核对详情',exact:true}).isDisabled(),true);
     await dialog.getByRole('combobox',{name:'手机收款人'}).selectOption('wang');
@@ -47,7 +47,7 @@ try {
   });
   await check('transfer prepares a pending task page and cannot spend without confirmation',async()=>{
     await page.getByRole('button',{name:'给小王转 200 元',exact:true}).click(); await idle();
-    await page.getByRole('button',{name:'待办',exact:true}).getAttribute('aria-current').then(v=>assert.equal(v,'page'));
+    await page.getByRole('button',{name:'待办事项',exact:true}).getAttribute('aria-current').then(v=>assert.equal(v,'page'));
     const card=page.locator('.ba-left-content .ba-task').first(); await card.waitFor();
     assert.equal((await state()).balance,1286000); assert.equal(await card.getByRole('button',{name:'确认执行',exact:true}).isDisabled(),true);
     await shot('03-prefilled-confirmation');
@@ -55,10 +55,10 @@ try {
     assert.equal((await state()).balance,1266000); assert.equal((await state()).ledger.length,1);
     await page.getByRole('button',{name:'全部',exact:true}).click(); await page.getByText(/回执已记录/).first().waitFor(); await shot('04-receipt');
   });
-  await check('my page reaches services and manual card flow still uses the shared policy backend',async()=>{
-    await page.getByRole('button',{name:'我的',exact:true}).click(); await page.getByRole('button',{name:/服务与安全设置/}).click();
+  await check('home reaches services, back returns home, profile shows account facts; manual card flow still uses the shared policy backend',async()=>{
+    await page.getByRole('button',{name:'首页',exact:true}).click(); await page.getByRole('button',{name:'更多服务',exact:true}).click();
     await page.getByRole('button',{name:'订阅与代扣',exact:true}).waitFor(); assert.equal(await page.locator('.ba-assistant').isVisible(),false);
-    await page.getByRole('button',{name:'返回上一页',exact:true}).click(); assert.equal(await page.locator('.bm-profile-panel').isVisible(),true); await shot('05-profile');
+    await page.getByRole('button',{name:'返回上一页',exact:true}).click(); assert.equal(await page.locator('.bm-welcome').isVisible(),true); await page.getByRole('button',{name:'个人中心',exact:true}).click(); assert.equal(await page.locator('.bm-profile-panel').isVisible(),true); assert.equal(await page.locator('.v3-account').isVisible(),true); await shot('05-profile');
   });
   await check('native back event navigates without executing or changing balance',async()=>{
     await page.getByRole('button',{name:'助手',exact:true}).click(); await page.evaluate(()=>window.dispatchEvent(new Event('bank-mobile-back',{cancelable:true})));
@@ -98,7 +98,7 @@ try {
     await task.getByRole('button',{name:'获取演示验证码',exact:true}).click();await task.getByTestId('demo-code').waitFor();
     await task.getByRole('textbox',{name:'输入六位演示验证码'}).fill(await task.getByTestId('demo-code').innerText());
     await task.getByRole('checkbox').check();await task.getByRole('button',{name:'确认执行',exact:true}).click();await idle();
-    await page.getByRole('button',{name:'我的',exact:true}).click();await page.getByRole('button',{name:/服务与安全设置/}).click();await page.getByRole('button',{name:'扩展卡服务',exact:true}).click();
+    await page.getByRole('button',{name:'首页',exact:true}).click();await page.getByRole('button',{name:'更多服务',exact:true}).click();await page.getByRole('button',{name:'扩展卡服务',exact:true}).click();
     await page.locator('.ba-card-payment-demo>summary').click();
     await page.getByRole('textbox',{name:'模拟刷卡金额',exact:true}).fill('20');await page.getByRole('button',{name:'准备模拟刷卡',exact:true}).click();
     await page.getByRole('alert').waitFor();assert.match(await page.getByRole('alert').innerText(),/限制线上交易/);assert.equal((await state()).balance,1266000);await shot('09-card-blocked');
