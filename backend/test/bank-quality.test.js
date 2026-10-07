@@ -92,7 +92,7 @@ test('formatted private numbers and secrets are blocked before mock provider or 
   for (const text of ['尾号8806', '转200元，留1000元', '2026-09-26']) assert.equal(hasPrivateData(text), false);
 });
 test('legacy history receives the same privacy boundary before it reaches model', async () => {
-  const f = fixture();
+  const f = fixture({ ruleFastPath: false }); // plain lookups would otherwise be answered by rules without reaching the model
   f.store.transact(db => { Object.values(db.sessions)[0].history.push({ role: 'user', text: '手机号138-0013-8000' }); });
   f.set([{ type: 'balance' }]); await f.chat('查询余额');
   assert.equal(f.sent.length, 1); assert.ok(!JSON.stringify(f.sent[0]).includes('138-0013-8000'));

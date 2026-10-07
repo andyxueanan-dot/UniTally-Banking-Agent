@@ -721,3 +721,10 @@ body:has(.ba-root.v2) { background: #fff; }
 .v2-composer-bar button { width: 36px; height: 36px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
 .bm-tab-assistant .ba-composer > div { margin: 6px 0 0; flex: none; }
 @media (max-width: 360px) { .v2-composer-bar .v2-composer-note { display: none; } }
+
+/* ---------- Fields the planner inferred from vague wording ----------
+   Same amber as "待确认"; text only, no box, no glow. */
+.v2-uncertain-note { margin: 10px 0 0; font-size: 14px; color: var(--amber); line-height: 1.6; }
+.v2-check { font-style: normal; font-size: 12px; font-weight: 600; color: var(--amber); letter-spacing: 0.08em; flex: none; }
+.ba-task-facts > div.v2-uncertain strong { color: var(--amber); text-decoration: underline dotted; text-decoration-color: var(--amber); text-underline-offset: 4px; text-decoration-thickness: 1px; }
+.ba-task-facts > div.v2-uncertain > span::after { border-bottom-color: var(--amber); }

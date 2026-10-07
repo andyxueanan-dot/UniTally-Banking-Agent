@@ -1,6 +1,7 @@
 const { randomBytes, randomInt, createHash } = require('node:crypto');
 const { seedSession, monthKey } = require('./seed');
 const { validatePlan, DEMOS } = require('./planner');
+const { rulePlan } = require('./rule-plan');
 const { hasPrivateData, safeHistory, normalized } = require('./privacy');
 const { resolveRecipient, replaceDemoPhones } = require('./recipient');
 const { analyzeLedger, ledgerDetails } = require('./analytics');
@@ -62,8 +63,8 @@ function view(s, now) {
 }
 
 class BankService {
-  constructor({ store, planner, now = Date.now, maxDailyCalls = 80, limits = {}, passkeySdk, passkeyOrigin = 'http://localhost:5091' }) {
-    this.store = store; this.planner = planner; this.now = now; this.maxDailyCalls = maxDailyCalls;
+  constructor({ store, planner, now = Date.now, maxDailyCalls = 80, limits = {}, passkeySdk, passkeyOrigin = 'http://localhost:5091', ruleFastPath = true }) {
+    this.store = store; this.planner = planner; this.now = now; this.maxDailyCalls = maxDailyCalls; this.ruleFastPath = ruleFastPath === true;
     this.passkey = createPasskey({ sdk: passkeySdk, now, origin: passkeyOrigin });
     this.inFlight = new Set();
     this.limits = { maxSessions: 100, maxTasks: 300, maxCommands: 1000, commandsPerMinute: 20, sessionCreatesPerMinute: 10, maxConcurrentPlans: 4, challengesPerTask: 5, passkeyRegistrations: 5, ...limits };
@@ -148,7 +149,7 @@ class BankService {
     if (hasPrivateData(display)) fail('PRIVATE_DATA_BLOCKED', '业务面板也只接受虚构信息，不接收真实号码或密钥。');
     return this.chat(token, { text: `业务面板提交：${display}` }, action);
   }
-  async chat(token, { text, demo, simulateTimeout = false }, manualAction = null) {
+  async chat(token, { text, demo, simulateTimeout = false, ruleOnly = false }, manualAction = null) {
     const snapshot = this.session(this.store.read(), token);
     if (typeof text !== 'string' || !text.trim() || text.length > 1000) fail('INVALID_MESSAGE', '请输入 1～1000 字的业务需求。');
     text = replaceDemoPhones(text, snapshot.contacts).text;
@@ -181,8 +182,12 @@ class BankService {
       const planningNow = this.now();
       if (manualAction) plan = { actions: [structuredClone(manualAction)], question: '', meta: { mode: 'manual', provider: '用户填写业务面板（未调用 AI）', latencyMs: 0, totalTokens: 0 } };
       else if (demo) plan = { ...structuredClone(DEMOS[demo]), meta: { mode: 'offline', provider: '固定案例（非 AI）', latencyMs: 0, totalTokens: 0 } };
-      else {
-        if (!this.planner.configured) fail('AI_NOT_CONFIGURED', 'DeepSeek 尚未配置；可切换离线演示。', 503);
+      else if (this.ruleFastPath && rulePlan(text)) {
+        // Plain lookups (余额/卡片/账单) are matched by strict patterns; no model call, no AI quota, labelled as rules.
+        plan = { ...rulePlan(text), meta: { mode: 'rule', provider: '规则解析（未调用 AI）', latencyMs: 0, totalTokens: 0 } };
+      } else {
+        if (ruleOnly === true) fail('RULE_NO_MATCH', '离线模式只直接回答余额、卡片、账单明细和消费统计这类简单查询；这句话没有匹配到规则，也不会调用 AI。请换成固定案例，或切换到 AI 规划。', 422);
+        if (!this.planner.configured) fail('AI_NOT_CONFIGURED', 'AI 尚未配置。余额、卡片、账单这类简单查询可以直接输入；其他需求请使用固定案例。', 503);
         this.store.transact(db => { const key = day(this.now()); if ((db.usage[key] || 0) >= this.maxDailyCalls) fail('AI_BUDGET_LIMIT', '今日 AI 调用已达到本机限额，可继续使用离线演示。', 429); db.usage[key] = (db.usage[key] || 0) + 1; return null; });
         plan = await this.planner.plan(text, safeHistory(snapshot.history), plannerContext(snapshot, planningNow));
       }
@@ -206,7 +211,7 @@ class BankService {
         const s = this.session(db, token); const now = this.now();
         if (s.intentVersion !== admitted.version) fail('INTENT_CHANGED', '需求已变化，本次旧规划不会生成操作。', 409);
         s.history.push({ role: 'user', text, at: now, id: id() });
-        audit(s, 'INTENT_PARSED', `${plan.meta.mode === 'ai' ? `${plan.meta.provider} 工具规划` : plan.meta.mode === 'manual' ? '用户填写业务面板（无模型）' : '离线固定案例'}：${plan.actions.map(a => a.type).join(' → ') || '澄清/不支持'}；仅提出草案，没有执行写操作。`, now);
+        audit(s, 'INTENT_PARSED', `${plan.meta.mode === 'ai' ? `${plan.meta.provider} 工具规划` : plan.meta.mode === 'manual' ? '用户填写业务面板（无模型）' : plan.meta.mode === 'rule' ? '规则解析（关键词直接命中查询，未调用模型）' : '离线固定案例'}：${plan.actions.map(a => a.type).join(' → ') || '澄清/不支持'}；仅提出草案，没有执行写操作。`, now);
         let results = [];
         if (plan.actions.length > 1) {
           if ((s.workflows || []).length >= 40) fail('WORKFLOW_LIMIT', '本会话工作流已达40个；历史记录保留，请继续已有工作流。', 429);
@@ -359,10 +364,11 @@ class BankService {
       title = `${a.type === 'freeze_card' ? '挂失冻结' : a.type === 'unfreeze_card' ? '解挂恢复' : '调整消费限额'} · ${card.name} ${card.last4}${action.cents ? ` → ${money(action.cents)}` : ''}`;
     } else fail('UNSUPPORTED_ACTION', '该操作不在白名单中。');
     checkAccountAction(s,action,now,fail);
-    const task = { id: id(), title, action, intentVersion: s.intentVersion || 0, status: 'AWAITING_CONFIRMATION', risk: level(s, action, now), createdAt: now, expiresAt: now + 10 * 60_000,
+    const uncertain = Array.isArray(a.uncertain) ? [...new Set(a.uncertain.filter(f => typeof f === 'string'))].slice(0, 4) : [];
+    const task = { id: id(), title, action, uncertain, intentVersion: s.intentVersion || 0, status: 'AWAITING_CONFIRMATION', risk: level(s, action, now), createdAt: now, expiresAt: now + 10 * 60_000,
       fault: simulateTimeout && action.type === 'transfer' ? 'timeout' : null,
       steps: [{ label: '理解需求', state: 'done' }, { label: '校验账户与权限', state: 'done' }, { label: '等待用户确认', state: 'current' }, { label: '执行并核对回执', state: 'waiting' }] };
-    s.tasks.push(task); audit(s, 'TASK_PROPOSED', `${title}；${task.risk === 'red' ? '红色强验证' : '黄色确认'}；尚未执行。`, now, task.id);
+    s.tasks.push(task); audit(s, 'TASK_PROPOSED', `${title}；${task.risk === 'red' ? '红色强验证' : '黄色确认'}；尚未执行。${uncertain.length ? `模型标注需核对字段：${uncertain.join('、')}。` : ''}`, now, task.id);
     if (action.scheduleId) s.advanced.schedules.find(item => item.id === action.scheduleId).activeTaskId = task.id;
     return { type: 'proposal', taskId: task.id, text: `已准备：${title}。${task.risk === 'red' ? s.passkeyCredential ? '需要确认详情并使用已注册 Passkey 验证设备' : '需要确认详情并完成演示身份验证' : '需要你确认详情'}，目前没有执行。${task.fault ? '本次将演示接口超时与后续对账。' : ''}` };
   }

@@ -142,6 +142,12 @@ type TaskAction = (
   body?: object,
 ) => Promise<{ demoCode?: string; expiresAt?: number } | undefined>;
 
+// Fields the planner flagged as inferred from vague wording ("两百", "室友小王"). The row keeps its value;
+// an amber "核对" tag and a dotted amber underline ask the user to double-check before confirming.
+const uncertainOf = (task: BankTask, field: string) => (task.uncertain || []).includes(field);
+const flag = (task: BankTask, field: string) => (uncertainOf(task, field) ? "v2-uncertain" : "");
+const mark = (task: BankTask, field: string) => (uncertainOf(task, field) ? <em className="v2-check">核对</em> : null);
+
 function TaskCard({
   task,
   busy,
@@ -205,6 +211,9 @@ function TaskCard({
         </span>
       </div>
       <h3>{task.title}</h3>
+      {waiting && !!task.uncertain?.length && (
+        <p className="v2-uncertain-note">带「核对」标记的项是助手从口语推断的，请逐项核对后再确认。</p>
+      )}
       {waiting && (
         <div className="ba-task-facts">
           {task.action.shares?.map((share) => (
@@ -217,9 +226,10 @@ function TaskCard({
             </div>
           ))}
           {(task.action.recipientLast4 || task.action.cardLast4) && (
-            <div>
+            <div className={flag(task, task.action.type === "transfer" ? "recipient" : "cardLast4")}>
               <span>
                 {task.action.type === "transfer" ? "收款账户" : "操作卡片"}
+                {mark(task, task.action.type === "transfer" ? "recipient" : "cardLast4")}
               </span>
               <strong>
                 {task.action.recipientName || "演示卡片"} · 尾号{" "}
@@ -228,20 +238,21 @@ function TaskCard({
             </div>
           )}
           {task.action.cents !== undefined && (
-            <div>
+            <div className={flag(task, "amount")}>
               <span>
                 {task.action.type === "transfer"
                   ? "转账金额"
                   : task.action.type === "card_limit"
                     ? "新消费限额"
                     : "操作金额"}
+                {mark(task, "amount")}
               </span>
               <strong>{money(task.action.cents)}</strong>
             </div>
           )}
           {task.action.reserveCents !== undefined && (
-            <div>
-              <span>转账后至少保留</span>
+            <div className={flag(task, "reserveAmount")}>
+              <span>转账后至少保留{mark(task, "reserveAmount")}</span>
               <strong>{money(task.action.reserveCents)}</strong>
             </div>
           )}
@@ -723,19 +734,14 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
   };
   const send = async (text: string, demo?: string, simulateTimeout = false) => {
     if (!token || busy || !text.trim()) return;
-    if (mode === "offline" && !demo) {
-      setError(
-        "离线模式只运行明确的固定案例，不会理解自由输入。自由对话需要已配置的 AI 模型。",
-      );
-      return;
-    }
     setBusy(true);
     setError("");
     setInput("");
     try {
       const result = await bankRequest<BankResponse>("/chat", token, {
         text,
-        ...(mode === "offline" ? { demo } : {}),
+        // Offline: a fixed case runs as-is; free text may only be answered by the backend rule parser (never AI).
+        ...(mode === "offline" ? (demo ? { demo } : { ruleOnly: true }) : {}),
         simulateTimeout,
       });
       applyState(result.state);
@@ -744,7 +750,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
       return result.message?.results?.some(r => r.type === 'proposal');
     } catch (e) {
       handleError(e);
-      if (mode === "ai") setInput(text);
+      setInput(text);
     } finally {
       setBusy(false);
     }
@@ -1797,7 +1803,9 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                               ? "助手 · AI 规划"
                               : m.meta?.mode === "manual"
                                 ? "助手 · 表单操作"
-                                : "助手 · 固定案例"}
+                                : m.meta?.mode === "rule"
+                                  ? "助手 · 规则解析"
+                                  : "助手 · 固定案例"}
                         </span>
                         <div className="ba-message-content">
                           <p>
@@ -1811,12 +1819,14 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           ))}
                           {m.role === 'assistant' && m.meta?.mode === 'ai' && <PlannerFeedback busy={busy} onSave={correction => saveFeedback(m.id, correction)} />}
                           {m.meta && (
-                            <details className="ba-message-source"><summary>{m.meta.mode === 'ai' ? 'AI 规划 · 后台核验' : m.meta.mode === 'manual' ? '表单操作 · 非 AI' : '固定案例 · 非 AI'}</summary><small>
+                            <details className="ba-message-source"><summary>{m.meta.mode === 'ai' ? 'AI 规划 · 后台核验' : m.meta.mode === 'manual' ? '表单操作 · 非 AI' : m.meta.mode === 'rule' ? '规则解析 · 非 AI' : '固定案例 · 非 AI'}</summary><small>
                               {m.meta.mode === "ai"
                                 ? `${m.meta.provider} / ${m.meta.model || '模型'} · ${(m.meta.latencyMs / 1000).toFixed(1)} 秒 · ${m.meta.totalTokens} tokens`
                                 : m.meta.mode === "manual"
                                   ? "业务面板 · 用户填写（未调用 AI）"
-                                  : "离线固定案例（未调用模型）"}
+                                  : m.meta.mode === "rule"
+                                    ? "关键词直接命中查询 · 未调用模型，不消耗 AI 额度"
+                                    : "离线固定案例（未调用模型）"}
                               <br />
                               业务数字与执行结果均来自模拟账本
                             </small></details>
@@ -1855,9 +1865,9 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       placeholder={
                         mode === "ai"
                           ? "例如：给王明转两百元，先让我确认"
-                          : "离线模式：请点上方固定案例"
+                          : "离线：可直接问余额、卡片、本月消费；其他请点固定案例"
                       }
-                      disabled={busy || mode === "offline"}
+                      disabled={busy}
                       onKeyDown={(e) => {
                         if (
                           e.key === "Enter" &&
@@ -1891,7 +1901,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       <button
                         aria-label="发送需求"
                         type="submit"
-                        disabled={busy || !input.trim() || mode === "offline"}
+                        disabled={busy || !input.trim()}
                       >
                         <Send size={18} />
                       </button>

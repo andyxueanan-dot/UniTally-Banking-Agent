@@ -8,7 +8,7 @@ test('compatible provider preserves validated tool contract and truthful metadat
 });
 test('provider outage performs no hidden fallback and never returns fake green success',async()=>{
  let calls=0;const p=createDeepSeekPlanner({apiKey:'test-only',fetchImpl:async()=>{calls++;throw Error('not exposed');}});
- const s=new BankService({store:createBankStore(),planner:p});const {token}=s.create();
+ const s=new BankService({store:createBankStore(),planner:p,ruleFastPath:false});const {token}=s.create();
  await assert.rejects(()=>s.chat(token,{text:'查余额'}),e=>e.code==='AI_UNAVAILABLE'&&/AI 暂不可用/.test(e.message));
  assert.equal(calls,1);assert.equal(s.get(token).history.length,0);assert.equal(s.get(token).ledger.length,0);assert.equal(s.metadata().aiCallsToday,1);
 });
@@ -23,7 +23,7 @@ test('oversized requests are refused before provider invocation, not silently tr
 });
 test('invalid AI plan is queued privately for review, not inserted into model context',async()=>{
  const p=createDeepSeekPlanner({apiKey:'test-only',fetchImpl:async()=>({ok:true,json:async()=>({choices:[{message:{content:'pretend success'}}]})})});
- const s=new BankService({store:createBankStore(),planner:p});const {token}=s.create();await assert.rejects(()=>s.chat(token,{text:'查余额'}),{code:'INVALID_AI_PLAN'});
+ const s=new BankService({store:createBankStore(),planner:p,ruleFastPath:false});const {token}=s.create();await assert.rejects(()=>s.chat(token,{text:'查余额'}),{code:'INVALID_AI_PLAN'});
  const queue=s.feedbackExport(token);assert.equal(queue.items.length,1);assert.equal(queue.items[0].eligibleForPrompt,false);assert.equal(queue.items[0].status,'UNREVIEWED');
  assert.equal(s.get(token).balance,1286000);assert.equal(s.get(token).ledger.length,0);
 });

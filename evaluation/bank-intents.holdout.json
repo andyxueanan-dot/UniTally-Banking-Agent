@@ -1,0 +1,28 @@
+{
+  "classification": "Sealed hold-out set written 2026-10-07 before any further prompt tuning. Do not read it while editing prompts or rules; run live at most once per release with a NEW explicit budget (scripts/evaluate-bank-full.mjs --dataset=holdout --live --run=<name>). Report the score as-is, including failures.",
+  "cases": [
+    {"id":"h-balance-phrasing","scene":"query","text":"账户里现在能用的钱有多少","types":["balance"],"noDraft":true},
+    {"id":"h-category-last-month","scene":"analysis","text":"我上个月在交通上花了多少","types":["analyze"],"fields":{"period":"last_month","category":"交通"},"noDraft":true},
+    {"id":"h-week-details","scene":"analysis","text":"列一下本周的所有账单明细","types":["transactions"],"fields":{"period":"this_week"},"noDraft":true},
+    {"id":"h-compare","scene":"analysis","text":"这个月为什么比上个月花得多","types":["analyze"],"fields":{"period":"compare"},"noDraft":true},
+    {"id":"h-transfer-chinese-number","scene":"transfer","text":"转三百五给王明","types":["transfer"],"risk":"yellow","cents":35000,"recipientId":"wang","confirm":true},
+    {"id":"h-transfer-reserve","scene":"transfer","text":"转150元给李悦，转完账户至少剩800","types":["transfer"],"fields":{"reserveAmount":"800"},"cents":15000,"recipientId":"li","confirm":true},
+    {"id":"h-transfer-uncertain-alias","scene":"transfer","text":"给室友小王转两百","types":["transfer"],"cents":20000,"recipientId":"wang","uncertain":["recipient"],"confirm":true},
+    {"id":"h-same-name","scene":"clarify","text":"给陈晨转50块","clarify":true,"noDraft":true},
+    {"id":"h-card-limit","scene":"card","text":"把日常消费卡8806的每日限额改成300元","types":["card_limit"],"fields":{"cardLast4":"8806","limit":"300"},"confirm":true},
+    {"id":"h-freeze-lost","scene":"card","text":"我的6219卡丢了，先挂失","types":["freeze_card"],"fields":{"cardLast4":"6219"},"risk":"red","confirm":true},
+    {"id":"h-temporary-lock","scene":"card","text":"暂时锁一下8806，别挂失","types":["temporary_lock_card"],"fields":{"cardLast4":"8806"},"confirm":true},
+    {"id":"h-restrict-overseas","scene":"card","text":"禁止8806卡在境外刷","types":["card_restriction"],"fields":{"cardLast4":"8806","channel":"overseas","enabled":false},"confirm":true},
+    {"id":"h-subscription-list","scene":"subscription","text":"有哪些自动扣费在扣我的钱","types":["subscription_query"],"confirm":true},
+    {"id":"h-cancel-membership-keep-mandate","scene":"subscription","text":"云音乐的会员不要了，但代扣先别动","types":["cancel_subscription"],"fields":{"subscriptionId":"sub-music","scope":"merchant_membership"},"confirm":true},
+    {"id":"h-wealth-catalog","scene":"wealth","text":"给我看看能买的理财产品","types":["wealth_catalog"],"noDraft":true},
+    {"id":"h-wealth-buy","scene":"wealth","setup":"risk","text":"买200块的七日计划","types":["wealth_buy"],"fields":{"productId":"demo-term7","amount":"200"},"confirm":true},
+    {"id":"h-schedule-missing-time","scene":"clarify","text":"大后天给王明转100，具体时间再说","clarify":true,"noDraft":true},
+    {"id":"h-schedule-explicit","scene":"advanced","now":"2026-10-07T04:00:00Z","text":"后天早上9点提醒我给李悦转300","types":["schedule_transfer"],"fields":{"relativeDateKey":"day_after_tomorrow","localTime":"09:00"},"expectedExecutionUtc":"2026-10-09T01:00:00.000Z","confirm":true},
+    {"id":"h-aa-split","scene":"advanced","text":"和同学聚餐一共360，王明李悦和我三个人平摊","types":["aa_request"],"fields":{"amount":"360","includeSelf":true},"confirm":true},
+    {"id":"h-budget-vague-date","scene":"clarify","text":"下个月10号我妈生日，先帮我留800块","clarify":true,"noDraft":true},
+    {"id":"h-three-step","scene":"workflow","text":"先查余额，再给王明转120，最后看看我的卡","types":["balance","transfer","cards"],"confirm":true},
+    {"id":"h-explain-only","scene":"semantics","text":"我想了解怎么转账，先别真的操作","noDraft":true},
+    {"id":"h-cancel-pending","scene":"authorization","setup":"pending","text":"取消刚才那笔","types":["cancel_task"],"noDraft":true}
+  ]
+}

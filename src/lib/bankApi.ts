@@ -58,6 +58,7 @@ export interface BankTask {
   expiresAt: number;
   fault?: string;
   steps: { label: string; state: string }[];
+  uncertain?: string[];
   receipt?: {
     id: string;
     at: number;
