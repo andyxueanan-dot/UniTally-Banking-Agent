@@ -1,0 +1,45 @@
+/* FinPilot V3 preview — V2 plus "bank flavour".
+   Everything from bank-agent-v2.css applies; this file only (1) swaps the accent to a bank
+   blue, (2) adds a 3px brand rule to the header, (3) gives the single primary button per
+   screen the brand colour, (4) colours shortcut icons, (5) styles the greeting/notice lines.
+   bank-agent-v2.css and the V2 components are untouched. */
+@import './bank-agent-v2.css';
+
+.ba-root, .ba-modal {
+  --accent: #0b5cad;                 /* bank blue: HSL 210, 88%, 36% */
+  --accent-soft: rgba(11, 92, 173, 0.35);
+}
+
+/* Header: thin brand rule on top, wordmark in brand colour. */
+.ba-root.v3 .bm-header { border-top: 3px solid var(--accent); height: calc(59px + env(safe-area-inset-top)); }
+.ba-root.v3 .bm-header strong { color: var(--accent); }
+.ba-root.v3.bm-app { padding-top: calc(59px + env(safe-area-inset-top)); }
+
+/* One brand-coloured primary button per screen; secondary buttons stay outlined. */
+.ba-root.v3 .ba-primary, .ba-modal .ba-primary { background: var(--accent); border-color: var(--accent); }
+.ba-root.v3 .ba-primary:hover:not(:disabled), .ba-modal .ba-primary:hover:not(:disabled) { background: #094a8c; }
+
+/* Service shortcuts and active tab pick up the brand colour (tiny areas). */
+.ba-root.v3 .v2-shortcuts button > svg { color: var(--accent); }
+.ba-root.v3 .bm-bottom-nav button.active { color: var(--accent); }
+.ba-root.v3 .bm-bottom-nav button.active::before { background: var(--accent); }
+
+/* Greeting above the assistant entry; dated notice above the footer. Text only. */
+.v3-greeting { font-size: 17px; color: var(--ink); margin: 26px 0 -18px; }
+.v3-notice { display: flex; align-items: baseline; gap: 10px; font-size: 14px; color: var(--ink-2); margin: 22px 0 0; line-height: 1.6; }
+.v3-notice span { color: var(--accent); font-weight: 600; letter-spacing: 0.08em; flex: none; }
+.ba-root.v3 .v2-footnote { margin-top: 8px; }
+
+/* Receipt rows: one subscription / one fact per line, dotted leaders, amount on the right. */
+.v3-result-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.v3-result-list li { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px dotted var(--rule-2); font-size: 15px; color: var(--ink); line-height: 1.5; }
+.v3-result-list li:last-child { border-bottom: 0; }
+.v3-result-list li > span { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v3-result-list li small { font-size: 13px; color: var(--ink-3); }
+.v3-result-list li > b { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v3-result-tail { margin: 8px 0 0 !important; font-size: 13px !important; color: var(--ink-3) !important; }
+
+/* Account facts on 个人中心 (replaces a login the demo does not have). */
+.v3-account { display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; margin: 12px 0 18px; font-size: 15px; }
+.v3-account dt { color: var(--ink-3); }
+.v3-account dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
