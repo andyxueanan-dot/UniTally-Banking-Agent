@@ -41,6 +41,9 @@ import {
   MessageSquareText,
   UserRound,
   ChevronLeft,
+  Gift,
+  Headset,
+  KeyRound,
 } from "lucide-react";
 import {
   bankRequest,
@@ -60,6 +63,7 @@ import "./bank-agent-v3.css";
 // Orbit mark (concept A, eccentric O): one even-odd path on a 256 grid. Source: review-2026-10-09/orbit-icon.
 const ORBIT_MARK = 'M24 128 A104 104 0 1 0 232 128 A104 104 0 1 0 24 128 Z M76 118 A66 66 0 1 0 208 118 A66 66 0 1 0 76 118 Z';
 import BankServices, { type ManualAction } from "./bank/BankServices";
+import { ExtraResult, FlowList, HandoffDesk } from "./bank/AgentExtras";
 import PasskeyPanel from "./bank/PasskeyPanel";
 import { passkeyLocalUrl } from "@/lib/bankApi";
 import { connectionDetails } from '@/lib/bankConnection';
@@ -114,7 +118,7 @@ const cardStatusLabel = (status: string) =>
   ({ ACTIVE: "正常使用", LOCKED: "临时锁定", FROZEN: "已挂失冻结" })[status] ||
   status;
 const isIncoming = (type: string) =>
-  ["investment_redeem", "aa_receipt"].includes(type);
+  ["investment_redeem", "aa_receipt", "refund"].includes(type);
 const suggestions = [
   {
     id: "analysis",
@@ -136,6 +140,20 @@ const suggestions = [
     short: "挂失卡片",
     text: "帮我挂失冻结尾号 8806 的卡",
     icon: ShieldCheck,
+  },
+  {
+    id: "life_event",
+    title: "下个月15号是我爱人生日",
+    short: "生日联动",
+    text: "下个月15号是我爱人生日，帮我提前准备",
+    icon: Gift,
+  },
+  {
+    id: "bill_report",
+    title: "这个月的账单报告",
+    short: "月度报告",
+    text: "这个月的账单报告",
+    icon: FileText,
   },
 ];
 type TaskAction = (
@@ -196,6 +214,7 @@ function TaskCard({
   onAction,
   auth,
   compact = false,
+  reversals = [],
 }: {
   task: BankTask;
   busy: boolean;
@@ -203,8 +222,14 @@ function TaskCard({
   onAction: TaskAction;
   auth?: BankState["auth"];
   compact?: boolean;
+  reversals?: NonNullable<BankState["reversals"]>;
 }) {
   const [code, setCode] = useState("");
+  const [pin, setPin] = useState("");
+  const [pin2, setPin2] = useState("");
+  const pinStep = task.action.type === "change_password";
+  const pinOk = !pinStep || (/^\d{6}$/.test(pin) && pin === pin2);
+  const reversal = reversals.find((r) => r.originalTaskId === task.id);
   const [demoCode, setDemoCode] = useState("");
   const [codeExpires, setCodeExpires] = useState(0);
   const [ack, setAck] = useState(false);
@@ -402,12 +427,21 @@ function TaskCard({
             />
             我已核对以上操作详情，仅在沙箱中执行
           </label>
+          {pinStep && (
+            <div className="v3-pin">
+              <p>新交易密码只在这里输入，以加盐哈希保存，不会发给模型，也不会出现在对话或记录里。</p>
+              <label>新密码<input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} aria-label="新的 6 位交易密码" /></label>
+              <label>再输一次<input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={pin2} onChange={(e) => setPin2(e.target.value.replace(/\D/g, ""))} aria-label="再次输入新交易密码" /></label>
+              {pin2.length === 6 && pin !== pin2 && <small>两次输入不一致</small>}
+            </div>
+          )}
           <div className="ba-task-buttons">
             <button
               className="ba-primary"
               disabled={
                 busy ||
                 !ack ||
+                !pinOk ||
                 !deviceOriginValid ||
                 (task.risk === "red" &&
                   !deviceRequired &&
@@ -417,6 +451,7 @@ function TaskCard({
                 onAction(task, deviceRequired ? "device-confirm" : "confirm", {
                   confirmed: true,
                   code,
+                  ...(pinStep ? { newPin: pin } : {}),
                 })
               }
             >
@@ -431,6 +466,9 @@ function TaskCard({
               取消任务
             </button>
           </div>
+          <button className="ba-link-button v3-handoff-link" disabled={busy} onClick={() => onAction(task, "handoff")}>
+            拿不准？转人工客服处理
+          </button>
         </>
       )}
       {status === "PENDING_REVIEW" && (
@@ -469,6 +507,17 @@ function TaskCard({
             </small>
           </div>
         </div>
+      )}
+      {task.receipt && ["transfer", "pay_merchant_order"].includes(task.action.type) && (
+        reversal ? (
+          <p className={`v3-reversal ${reversal.status.toLowerCase()}`}>
+            撤回申请 {reversal.id}：{reversal.status === "REQUESTED" ? "等待对方或银行受理" : reversal.status === "APPROVED" ? `已通过，${money(reversal.cents)} 已退回` : `未通过${reversal.reason ? `（${reversal.reason}）` : ""}`}
+          </p>
+        ) : (
+          <button className="ba-link-button v3-reverse-link" disabled={busy} onClick={() => onAction(task, "reverse")}>
+            转错了？申请撤回
+          </button>
+        )
       )}
       {task.result?.text && (
         <div className="ba-execution-result">
@@ -525,6 +574,7 @@ function AnalysisResult({ result }: { result: BankResult }) {
         <SourceRows rows={result.rows} />
       </details>
     );
+  if (["report", "life_events", "sandbox_calc"].includes(result.type)) return <ExtraResult result={result} />;
   if (result.type !== "analysis" || !result.categories) return null;
   const groups =
     result.anomalies ||
@@ -591,7 +641,7 @@ function AnalysisResult({ result }: { result: BankResult }) {
             ))}
         </div>
       )}
-      {groups.map((group) => (
+      {[...groups, ...(result.alerts || [])].map((group) => (
         <details className="ba-evidence ba-anomaly" key={group.id}>
           <summary>
             <AlertTriangle size={15} />
@@ -820,10 +870,17 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
         const result = await bankRequest<BankResponse>(
           `/tasks/${task.id}/passkey/confirm`,
           token,
-          { response, confirmed: true },
+          { response, confirmed: true, ...("newPin" in body ? { newPin: (body as { newPin?: string }).newPin } : {}) },
         );
         applyState(result.state);
         if (mobile && result.task?.status === 'SUCCEEDED') setTaskFilter('done');
+        return;
+      }
+      if (action === "reverse") {
+        const prepared = await bankRequest<BankResponse>("/prepare", token, { action: { type: "request_reversal", receiptId: task.receipt?.id } });
+        applyState(prepared.state);
+        const blocked = prepared.message?.results?.find((r) => r.type === "blocked" || r.type === "clarify");
+        if (blocked) setError(blocked.text); else setTaskFilter("active");
         return;
       }
       const result = await bankRequest<
@@ -831,7 +888,8 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
       >(`/tasks/${task.id}/${action}`, token, body);
       if (result.state) applyState(result.state);
       else if (token) applyState(await bankRequest<BankState>("/state", token));
-      if (mobile && result.task?.status === 'SUCCEEDED') setTaskFilter('done');
+      // A multi-step plan prepares its next draft right away; keep the user on the pending list.
+      if (mobile && result.task?.status === 'SUCCEEDED') setTaskFilter(result.state?.tasks?.some((t) => t.status === "AWAITING_CONFIRMATION") ? "active" : "done");
       return result;
     } catch (e) {
       handleError(e);
@@ -922,6 +980,19 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     try { const value = await bankRequest('/feedback', token); const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'planner-feedback-unreviewed.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
     catch (e) { handleError(e); }
     finally { setBusy(false); }
+  };
+  const deskAction = async (caseId: string, action: string, body: { note?: string; agent?: string } = {}) => {
+    if (!token || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await bankRequest<BankResponse>(`/handoffs/${caseId}/${action}`, token, body);
+      applyState(result.state);
+    } catch (e) {
+      handleError(e);
+    } finally {
+      setBusy(false);
+    }
   };
   const controlWorkflow = async (id: string, action: string) => {
     if (!token || busy) return;
@@ -1126,7 +1197,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     : "本月";
   return (
     <div className={`ba-root v2 v3 ${mobile ? `bm-app bm-tab-${tab}` : ''}`}>
-      {mobile && <header className="bm-header"><div>{['bills', 'cards', 'services'].includes(tab) ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : null}{!['bills', 'cards', 'services'].includes(tab) && <svg className="v3-mark" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d={ORBIT_MARK} /></svg>}<strong>{({overview:'Orbit 演示银行',assistant:'智能助手',audit:'待办事项',profile:'个人中心',bills:'交易明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
+      {mobile && <header className="bm-header"><div>{['bills', 'cards', 'services', 'desk'].includes(tab) ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : null}{!['bills', 'cards', 'services', 'desk'].includes(tab) && <svg className="v3-mark" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d={ORBIT_MARK} /></svg>}<strong>{({overview:'Orbit 演示银行',assistant:'智能助手',audit:'待办事项',profile:'个人中心',bills:'交易明细',cards:'卡片管理',services:'服务中心',desk:'人工客服工作台'})[tab]}</strong></div><span>演示</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
       <aside className="ba-sidebar">
         <a className="ba-logo" href="/bank-agent" aria-label="FinPilot 首页">
           <span className="ba-logo-mark">
@@ -1229,7 +1300,9 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
           </div>
         </header>
         <main className="ba-main">
-          {mobile && tab === 'overview' && state && <MobileHome state={state} pending={pending.length} busy={busy} onNavigate={id => { if (id === 'audit') setTaskFilter('active'); go(id); }} onTransfer={() => setTransferOpen(true)} />}
+          {mobile && tab === 'overview' && state && <MobileHome state={state} pending={pending.length} busy={busy} onNavigate={id => { if (id === 'audit') setTaskFilter('active'); go(id); }} onTransfer={() => setTransferOpen(true)}
+            onAsk={text => { setInput(text); go('assistant'); }}
+            onPlanEvent={label => { void prepareManual({ type: 'life_event_plan', label, amount: '1000' }); }} />}
           <section className="ba-intro">
             <div>
               <div className="ba-eyebrow">
@@ -1354,7 +1427,8 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       {!connection.native && <details className="ba-settings-disclosure"><summary>设备验证与安全设置</summary><PasskeyPanel auth={state.auth} busy={busy} onRegister={registerDevice} /></details>}
                     </>
                   )}
-                  {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">F</div><h2>个人中心</h2><p>演示账户 · 虚构数据，不关联真实银行卡。</p><dl className="v3-account"><dt>账户类型</dt><dd>{state.accountPolicy?.label || "Ⅰ类演示账户"}</dd><dt>身份验证</dt><dd>{state.auth?.mode === "passkey" ? "已绑定设备 Passkey" : "页面内演示验证码"}</dd><dt>绑定卡片</dt><dd>{state.cards.length} 张</dd><dt>常用联系人</dt><dd>{state.contacts.length} 人</dd></dl><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
+                  {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">F</div><h2>个人中心</h2><p>演示账户 · 虚构数据，不关联真实银行卡。</p><dl className="v3-account"><dt>账户类型</dt><dd>{state.accountPolicy?.label || "Ⅰ类演示账户"}</dd><dt>身份验证</dt><dd>{state.auth?.mode === "passkey" ? "已绑定设备 Passkey" : "页面内演示验证码"}</dd><dt>绑定卡片</dt><dd>{state.cards.length} 张</dd><dt>常用联系人</dt><dd>{state.contacts.length} 人</dd><dt>交易密码</dt><dd>{state.tradePinSet ? "已设置" : "未设置"}</dd></dl><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={() => go('desk')}><Headset size={19}/>人工客服工作台（演示）{(state.handoffs || []).some(c => ['OPEN', 'CLAIMED'].includes(c.status)) && <b className="v3-count">{(state.handoffs || []).filter(c => ['OPEN', 'CLAIMED'].includes(c.status)).length}</b>}<ChevronRight size={17}/></button><button disabled={busy} onClick={() => { void prepareManual({ type: 'change_password' }); }}><KeyRound size={19}/>{state.tradePinSet ? '修改' : '设置'}交易密码<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
+                  {mobile && tab === 'desk' && <HandoffDesk handoffs={state.handoffs || []} reversals={state.reversals || []} busy={busy} onAction={deskAction} />}
                   {mobile && tab === 'profile' && <details className="ba-settings-disclosure"><summary>模型纠错记录 · {state.feedbackCount || 0} 条</summary><div className="ba-panel"><p>记录只用于人工审核，不自动加入提示词。导出后先脱敏，不要直接公开。</p><button className="ba-secondary" disabled={busy} onClick={exportFeedback}>导出待审核纠错</button></div></details>}
                   {!mobile && tab === "overview" && (
                     <>
@@ -1668,6 +1742,10 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                   )}
                   {tab === "audit" && (
                     <>
+                      {state.riskLock && (
+                        <p className="v3-risk-banner" role="alert">检测到异常行为（{state.riskLock.text}），转账等敏感操作暂停到 {new Date(state.lockedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}，已转人工复核；查询不受影响。</p>
+                      )}
+                      <FlowList workflows={state.workflows || []} busy={busy} onControl={controlWorkflow} />
                       <section className="ba-panel">
                         <div className="ba-panel-heading">
                           <div>
@@ -1728,6 +1806,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                                 onAction={act}
                                 auth={state.auth}
                                 compact
+                                reversals={state.reversals}
                               />
                             ))}
                           {!tasks.length && (
@@ -2016,6 +2095,15 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                         }
                       >
                         模拟接口超时
+                      </button>
+                      <button disabled={busy} onClick={() => send("聚餐 240 元三个人 AA，每人多少？", "sandbox_calc")}>
+                        AA 计算（沙箱）
+                      </button>
+                      <button disabled={busy} onClick={() => send("有人打电话让我转钱，我想找人工", "handoff")}>
+                        转人工
+                      </button>
+                      <button disabled={busy} onClick={() => send("我要修改交易密码", "change_password")}>
+                        修改交易密码
                       </button>
                     </div>
                     <p>演示边界处理，不会访问真实资金。</p>

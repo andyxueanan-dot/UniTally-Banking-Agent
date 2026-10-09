@@ -59,6 +59,7 @@ export interface BankTask {
   fault?: string;
   steps: { label: string; state: string }[];
   uncertain?: string[];
+  input?: Record<string, unknown>;
   receipt?: {
     id: string;
     at: number;
@@ -154,8 +155,48 @@ export interface BankWorkflow {
     receiptId?: string;
     error?: string;
     result?: { text?: string };
+    completedAt?: number;
   }[];
-  handoff?: { note: string; status: string };
+  handoff?: { note: string; status: string; caseId?: string };
+  kind?: "life_event" | "compensation" | string;
+  autoAdvance?: boolean;
+  compensates?: string;
+  compensatedBy?: string;
+  event?: { label: string; date: string; deliveryDate: string; cents: number };
+}
+export interface BankHandoff {
+  id: string;
+  kind: "workflow" | "task" | "chat" | "risk" | "reversal";
+  sourceId: string | null;
+  status: "OPEN" | "CLAIMED" | "RETURNED" | "CLOSED";
+  reason: string;
+  createdAt: number;
+  updatedAt: number;
+  agent: string | null;
+  context: Record<string, unknown>;
+  notes: { at: number; by: string; text: string }[];
+  resolution: string | null;
+  note: string;
+}
+export interface BankReversal {
+  id: string;
+  originalTaskId: string;
+  receiptId: string | null;
+  kind: "transfer_recall" | "merchant_refund";
+  cents: number;
+  counterpartyName: string;
+  status: "REQUESTED" | "APPROVED" | "REJECTED";
+  requestedAt: number;
+  resolvedAt?: number;
+  resolvedBy?: string;
+  reason?: string;
+}
+export interface BankLifeEvent {
+  id: string;
+  label: string;
+  relation: string;
+  date: string;
+  daysLeft?: number;
 }
 export interface BankResult {
   type: string;
@@ -164,7 +205,7 @@ export interface BankResult {
   period?: string;
   total?: number;
   previous?: number;
-  categories?: { name: string; cents: number }[];
+  categories?: { name: string; cents: number; share?: number }[];
   anomalyIds?: string[];
   rows?: BankTransaction[];
   anomalies?: {
@@ -186,6 +227,39 @@ export interface BankResult {
     previousRowIds: string[];
   }[];
   sourceRowIds?: string[];
+  alerts?: {
+    id: string;
+    kind: string;
+    merchant: string;
+    date: string;
+    cents: number;
+    rowIds: string[];
+    rows: BankTransaction[];
+    assessment: string;
+  }[];
+  // bill report
+  count?: number;
+  activeDays?: number;
+  transfersOut?: number;
+  inflow?: number;
+  previousTotal?: number | null;
+  topMerchants?: { name: string; cents: number; count: number }[];
+  subscriptions?: number;
+  highlights?: string[];
+  yearly?: boolean;
+  // life events / plans
+  events?: BankLifeEvent[];
+  event?: { label: string; date: string; deliveryDate: string; cents: number };
+  workflowId?: string;
+  caseId?: string;
+  // sandbox calculation
+  expression?: string;
+  wat?: string | null;
+  codeHash?: string | null;
+  ok?: boolean;
+  result?: string | null;
+  label?: string;
+  metrics?: { elapsedMs?: number; fuelConsumed?: number | null; fuelLimit?: number } | null;
   expenseTotal?: number;
   transferTotal?: number;
 }
@@ -229,6 +303,12 @@ export interface BankState {
   ledger: { id: string; taskId: string; cents: number }[];
   business?: BankBusiness;
   workflows?: BankWorkflow[];
+  lifeEvents?: BankLifeEvent[];
+  upcomingEvents?: BankLifeEvent[];
+  handoffs?: BankHandoff[];
+  reversals?: BankReversal[];
+  tradePinSet?: boolean;
+  riskLock?: { rule: string; text: string; at: number } | null;
 }
 export interface BankAdvanced {
   requests: {

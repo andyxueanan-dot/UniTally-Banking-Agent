@@ -728,7 +728,7 @@ class BankService {
       const a = n.action; const r = n.result || {};
       if (['balance', 'analyze', 'transactions', 'cards', 'merchant_catalog', 'wealth_catalog', 'wealth_positions', 'subscription_query', 'due_schedule', 'life_events', 'bill_report'].includes(a.type)) continue;
       if (a.type === 'transfer' || a.type === 'pay_merchant_order') steps.push({ type: 'request_reversal', receiptId: n.receiptId });
-      else if (a.type === 'prepare_merchant_order' && s.advanced?.orders.find(o => o.id === r.order?.id)?.status === 'PREPARED') steps.push({ type: 'cancel_merchant_order', orderId: r.order.id });
+      else if (a.type === 'prepare_merchant_order' && s.advanced?.orders.find(o => o.id === r.order?.id)?.status === 'PREPARED') steps.push({ type: 'cancel_merchant_order', orderId: r.order.id, productId: r.order.productId });
       else if (a.type === 'reserve_budget' && s.advanced?.budgets.find(b => b.id === r.budget?.id)?.status === 'ACTIVE') steps.push({ type: 'release_budget', budgetId: r.budget.id, __last: true });
       else if (a.type === 'freeze_card') steps.push({ type: 'unfreeze_card', cardLast4: a.cardLast4 });
       else if (a.type === 'unfreeze_card') steps.push({ type: 'freeze_card', cardLast4: a.cardLast4 });
