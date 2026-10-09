@@ -79,3 +79,11 @@ test('shared AI quota enforced with mock planner, no paid calls', async t => {
   assert.equal((await ask()).status, 200);
   const rejected = await ask(); assert.equal(rejected.status, 429); assert.equal((await rejected.json()).code, 'AI_BUDGET_LIMIT'); assert.equal(f.calls(), 1);
 });
+
+test('brand icons and manifest are served before login; everything else still redirects', async t => {
+  const { request } = await fixture(t);
+  for (const route of ['/favicon.svg', '/site.webmanifest', '/apple-touch-icon.png']) { const r = await request(route); assert.equal(r.status, 200, route); }
+  assert.equal((await request('/')).status, 303);
+  assert.equal((await request('/index.html')).status, 303);
+  assert.equal((await request('/api/bank/state')).status, 401);
+});

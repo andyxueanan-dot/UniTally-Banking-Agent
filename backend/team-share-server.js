@@ -58,11 +58,15 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
     res.cookie(COOKIE, token, { secure: true, httpOnly: true, sameSite: 'lax', path: '/', maxAge: expiry - now() });
     res.redirect(303, '/');
   });
+  const PUBLIC_ASSETS = new Set(['/favicon.ico', '/favicon.svg', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/maskable-512.png', '/site.webmanifest']);
+  const publicAssets = express.static(staticDir, { dotfiles: 'deny', index: false, fallthrough: true, maxAge: 0 });
   app.use((req, res, next) => {
     const token = (req.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1) || '';
     const key = digest(token).toString('hex');
     if (!sessions.has(key)) {
       if (req.path.startsWith('/api/')) return error(res, 401, 'TEAM_LOGIN_REQUIRED', '团队登录已失效，请刷新页面重新输入访问口令。');
+      // Brand icons and the web manifest are public: the login page's tab icon and "add to home screen" need them before any login.
+      if (req.method === 'GET' && PUBLIC_ASSETS.has(req.path)) return publicAssets(req, res, next);
       return res.redirect(303, '/team/login');
     }
     req.teamSessionKey = key;
