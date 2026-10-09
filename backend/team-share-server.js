@@ -16,7 +16,8 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
     if (!authSessions || !store) throw Error('Persistent sharing requires a durable bank store and durable login sessions');
     expiresAt = Number.MAX_SAFE_INTEGER;
   } else if (!Number.isFinite(expiresAt) || expiresAt <= now() || expiresAt > now() + 24 * 3600000) throw Error('Sharing must expire within 24 hours');
-  if (!Number.isInteger(maxDailyCalls) || maxDailyCalls < 0 || maxDailyCalls > 20) throw Error('Team AI daily limit must be 0-20');
+  // Raised for the review period (评委会自由输入)；每个演示账户另有 aiCallsPerSession 上限，一个访客用不完全天额度。
+  if (!Number.isInteger(maxDailyCalls) || maxDailyCalls < 0 || maxDailyCalls > 1000) throw Error('Team AI daily limit must be 0-1000');
   const sessions = authSessions || new Map();
   let loginAttempts = [];
   let requests = [];

@@ -20,6 +20,9 @@ const BALANCE = new RegExp(`^${POLITE}${LOOK}${MINE}(?:余额|可用余额|还�
 const CARDS = new RegExp(`^${POLITE}${LOOK}${MINE}(?:卡片|卡|银行卡|卡片状态|卡状态|有哪些卡|有几张卡|几张卡)${TAIL}$`);
 const periodAlt = PERIOD_WORDS.map(([w]) => w).join('|');
 const DETAILS = new RegExp(`^${POLITE}${LOOK}${MINE}(${periodAlt})?(?:的)?(?:账单明细|消费明细|交易明细|交易记录|消费记录|流水|明细)${TAIL}$`);
+// 账单报告 / 月报 / 年报 (read-only). Default period: this month, or this year when the user says 年.
+const REPORT = new RegExp(`^${POLITE}${LOOK}${MINE}(这个月|本月|上个月|上月|今年|本年|去年)?(?:的)?(?:月度|年度)?(?:账单)?(?:报告|月报|年报|总结)${TAIL}$`);
+const REPORT_PERIOD = { 这个月: 'this_month', 本月: 'this_month', 上个月: 'last_month', 上月: 'last_month', 今年: 'this_year', 本年: 'this_year', 去年: 'last_year' };
 const SPEND = new RegExp(`^${POLITE}${LOOK}${MINE}(${periodAlt})?(?:的)?(?:消费|花费|花销|支出|开销|账单|花了多少钱|花了多少)(?:情况|分析|统计|总额|汇总)?${TAIL}$`);
 
 function period(word) {
@@ -37,6 +40,7 @@ function rulePlan(text) {
   const t = text.replace(/\s+/g, '').trim();
   if (!t || t.length > 24 || NOT_A_LOOKUP.test(t)) return null;
   let m;
+  if ((m = t.match(REPORT))) return { actions: [{ type: 'bill_report', period: m[1] ? REPORT_PERIOD[m[1]] : (/年/.test(t) ? 'this_year' : 'this_month') }], question: '' };
   if (BALANCE.test(t)) return { actions: [{ type: 'balance' }], question: '' };
   if (CARDS.test(t)) return { actions: [{ type: 'cards' }], question: '' };
   if ((m = t.match(DETAILS))) return { actions: [{ type: 'transactions', period: period(m[1]) }], question: '' };

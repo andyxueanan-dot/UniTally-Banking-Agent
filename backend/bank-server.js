@@ -60,6 +60,8 @@ function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk,
   app.post('/api/bank/passkey/register/verify', wrap(async (req, res) => result(req, res, await service.passkeyRegistrationVerify(token(req), req.body))));
   app.post('/api/bank/tasks/:id/passkey/options', wrap(async (req, res) => result(req, res, await service.passkeyOptions(token(req), req.params.id))));
   app.post('/api/bank/tasks/:id/passkey/confirm', wrap(async (req, res) => result(req, res, await service.passkeyConfirm(token(req), req.params.id, req.body))));
+  app.post('/api/bank/tasks/:id/handoff', wrap((req, res) => send(req, res, service.taskHandoff(token(req), req.params.id))));
+  app.post('/api/bank/handoffs/:id/:action', wrap((req, res) => send(req, res, service.handoffAction(token(req), req.params.id, { action: req.params.action, note: req.body?.note, agent: req.body?.agent }))));
   for (const name of ['challenge', 'confirm', 'cancel', 'reconcile']) {
     app.post(`/api/bank/tasks/:id/${name}`, wrap((req, res) => {
       result(req, res, service[name](token(req), req.params.id, req.body));

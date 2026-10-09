@@ -33,7 +33,8 @@ test('multiple writes cannot share a single confirmation or skip strong authenti
 test('workflow pause and human handoff invalidate old drafts but never fabricate human response', async () => {
   const f = fixture(); await f.plan([{ type: 'balance' }, { type: 'transfer', recipient: '王明', amount: '200' }]);
   const flow = f.state().workflows[0]; const old = f.task();
-  f.service.workflowControl(f.token, flow.id, 'handoff'); assert.equal(f.state().workflows[0].handoff.status, 'PREPARED_NOT_SENT');
+  f.service.workflowControl(f.token, flow.id, 'handoff'); assert.equal(f.state().workflows[0].handoff.status, 'QUEUED');
+  const ticket = f.state().handoffs[0]; assert.equal(ticket.status, 'OPEN'); assert.equal(ticket.agent, null); assert.equal(ticket.notes.length, 0); // queued, nobody has answered
   assert.throws(() => f.service.confirm(f.token, old.id, { confirmed: true }), { code: 'TASK_NOT_ACTIONABLE' });
   f.service.workflowControl(f.token, flow.id, 'resume'); assert.notEqual(f.task().id, old.id); f.confirm(); assert.equal(f.state().balance, 1266000);
 });

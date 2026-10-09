@@ -1,10 +1,15 @@
-const { randomBytes, randomInt, createHash } = require('node:crypto');
+const { randomBytes, randomInt, createHash, scryptSync } = require('node:crypto');
 const { seedSession, monthKey } = require('./seed');
 const { validatePlan, DEMOS } = require('./planner');
 const { rulePlan } = require('./rule-plan');
 const { hasPrivateData, safeHistory, normalized } = require('./privacy');
 const { resolveRecipient, replaceDemoPhones } = require('./recipient');
-const { analyzeLedger, ledgerDetails } = require('./analytics');
+const { analyzeLedger, ledgerDetails, billReport, REPORT_PERIODS } = require('./analytics');
+const lifeEvents = require('./life-events');
+const handoffs = require('./handoff');
+const riskMonitor = require('./risk-monitor');
+const reversals = require('./reversal');
+const { runGenerated } = require('./generated-code');
 const { createPasskey } = require('./passkey');
 const workflow = require('./workflow');
 const { BUSINESS_TYPES, publicBusinessState, prepareBusiness, executeBusiness } = require('./business');
@@ -36,9 +41,17 @@ function daily(s, now) {
     .reduce((n, t) => n + t.action.cents, 0);
 }
 function level(s, action, now) {
+  if (action.type === 'change_password') return 'red';
+  if (action.type === 'request_reversal') return 'yellow';
   if (['subscription_query', 'cancel_subscription', 'risk_assessment', 'apply_virtual_card'].includes(action.type)) return 'yellow';
   if (ADVANCED_TYPES.includes(action.type)) return ['schedule_transfer', 'pay_merchant_order'].includes(action.type) ? 'red' : 'yellow';
   return action.type === 'transfer' && daily(s, now) + action.cents <= 100000 ? 'yellow' : 'red';
+}
+function hashPin(pin) {
+  if (typeof pin !== 'string' || !/^\d{6}$/.test(pin)) fail('NEW_PIN_REQUIRED', '请输入 6 位数字的新交易密码。');
+  if (/^(\d)\1{5}$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin)) fail('WEAK_PIN', '新密码不能是重复或连续数字。');
+  const salt = randomBytes(16).toString('hex');
+  return { salt, hash: scryptSync(pin, salt, 32).toString('hex'), algorithm: 'scrypt' };
 }
 function audit(s, event, detail, now, taskId) {
   s.audit.push({ id: id(), at: now, event, detail, taskId: taskId || null });
@@ -49,7 +62,7 @@ function finishDraft(t, status, now) {
   t.steps = (t.steps || []).map((step, index) => index < 2 ? step : { label: index === 2 ? label : '未执行', state: 'stopped' });
 }
 function publicTask(t, now) {
-  const { challenge, passkeyPending, ...safe } = structuredClone(t);
+  const { challenge, passkeyPending, pendingPin, ...safe } = structuredClone(t);
   if (safe.status === 'AWAITING_CONFIRMATION' && safe.expiresAt <= now) finishDraft(safe, 'EXPIRED', now);
   else if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(safe.status)) finishDraft(safe, safe.status, safe.endedAt || now);
   return safe;
@@ -59,15 +72,19 @@ function view(s, now) {
     auth: { mode: s.passkeyCredential ? 'passkey' : 'demo_otp', canRegister: !s.passkeyCredential, origin: s.passkeyOrigin || 'http://localhost:5091' },
     contacts: s.contacts.map(({ balance, ...c }) => c), cards: s.cards.map(c => ({ ...c, kind: 'DEBIT' })), accountPolicy: publicAccountPolicy(s,now), transactions: s.transactions,
     tasks: s.tasks.map(t => publicTask(t, now)).reverse(), audit: s.audit.slice(-120).reverse(),
-    history: s.history.slice(-40), feedbackCount: (s.plannerFeedback || []).length, workflows: s.workflows || [], business: publicBusinessState(s, now), advanced: publicAdvancedState(s, now), lockedUntil: s.lockedUntil, ledger: s.ledger.slice(-50), sandbox: true };
+    history: s.history.slice(-40), feedbackCount: (s.plannerFeedback || []).length, workflows: s.workflows || [], business: publicBusinessState(s, now), advanced: publicAdvancedState(s, now), lockedUntil: s.lockedUntil, ledger: s.ledger.slice(-50), sandbox: true,
+    lifeEvents: lifeEvents.ensureLifeEvents(s, now), upcomingEvents: lifeEvents.upcomingEvents(s, now), handoffs: handoffs.publicHandoffs(s), reversals: structuredClone(reversals.ensureReversals(s)).reverse(),
+    tradePinSet: Boolean(s.tradePin), riskLock: s.riskLock && s.lockedUntil > now ? s.riskLock : null };
 }
 
 class BankService {
-  constructor({ store, planner, now = Date.now, maxDailyCalls = 80, limits = {}, passkeySdk, passkeyOrigin = 'http://localhost:5091', ruleFastPath = true }) {
+  constructor({ store, planner, now = Date.now, maxDailyCalls = 80, limits = {}, passkeySdk, passkeyOrigin = 'http://localhost:5091', ruleFastPath = true, riskRules = {} }) {
     this.store = store; this.planner = planner; this.now = now; this.maxDailyCalls = maxDailyCalls; this.ruleFastPath = ruleFastPath === true;
+    // riskRules:false switches the behaviour monitor off (used by tests that are about something else).
+    this.riskRules = riskRules === false ? null : { ...riskMonitor.DEFAULT_RULES, ...riskRules };
     this.passkey = createPasskey({ sdk: passkeySdk, now, origin: passkeyOrigin });
     this.inFlight = new Set();
-    this.limits = { maxSessions: 100, maxTasks: 300, maxCommands: 1000, commandsPerMinute: 20, sessionCreatesPerMinute: 10, maxConcurrentPlans: 4, challengesPerTask: 5, passkeyRegistrations: 5, ...limits };
+    this.limits = { maxSessions: 100, maxTasks: 300, maxCommands: 1000, commandsPerMinute: 20, sessionCreatesPerMinute: 10, maxConcurrentPlans: 4, challengesPerTask: 5, passkeyRegistrations: 5, aiCallsPerSession: 40, ...limits };
     for (const [key, value] of Object.entries(this.limits)) if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`Invalid resource limit: ${key}`);
   }
   session(state, token) {
@@ -188,7 +205,9 @@ class BankService {
       } else {
         if (ruleOnly === true) fail('RULE_NO_MATCH', '离线模式只直接回答余额、卡片、账单明细和消费统计这类简单查询；这句话没有匹配到规则，也不会调用 AI。请换成固定案例，或切换到 AI 规划。', 422);
         if (!this.planner.configured) fail('AI_NOT_CONFIGURED', 'AI 尚未配置。余额、卡片、账单这类简单查询可以直接输入；其他需求请使用固定案例。', 503);
-        this.store.transact(db => { const key = day(this.now()); if ((db.usage[key] || 0) >= this.maxDailyCalls) fail('AI_BUDGET_LIMIT', '今日 AI 调用已达到本机限额，可继续使用离线演示。', 429); db.usage[key] = (db.usage[key] || 0) + 1; return null; });
+        this.store.transact(db => { const key = day(this.now()); if ((db.usage[key] || 0) >= this.maxDailyCalls) fail('AI_BUDGET_LIMIT', '今日 AI 调用已达到本机限额，可继续使用离线演示。', 429);
+          const own = this.session(db, token); if ((own.aiCalls || 0) >= this.limits.aiCallsPerSession) fail('AI_SESSION_LIMIT', '这个演示账户的 AI 调用次数已用完；余额、卡片、账单等简单查询和固定案例仍可使用。', 429);
+          own.aiCalls = (own.aiCalls || 0) + 1; db.usage[key] = (db.usage[key] || 0) + 1; return null; });
         plan = await this.planner.plan(text, safeHistory(snapshot.history), plannerContext(snapshot, planningNow));
       }
       if (!['simulate_aa_payment', 'card_purchase'].includes(manualAction?.type)) validatePlan(plan);
@@ -200,8 +219,15 @@ class BankService {
       if (plan.actions.some(a => a.type === 'transfer') && /美元|美金|马币|林吉特|欧元|港币|日元|\b(?:USD|MYR|EUR|HKD|JPY|RM)\b|\$/i.test(text)) {
         plan.actions = []; plan.question = '当前银行原型仅支持人民币转账，不支持外币或汇率换算。请明确人民币金额。';
       }
-      if (plan.actions.some(a => !['balance', 'analyze', 'transactions', 'cards', 'wealth_catalog', 'wealth_positions', 'schedule_transfer', 'cancel_schedule', 'due_schedule', 'reserve_budget', 'prepare_merchant_order', 'merchant_catalog'].includes(a.type)) && /明天|后天|下周|下个月|每周|每月|定时|预约/.test(text)) {
+      if (plan.actions.some(a => !['balance', 'analyze', 'transactions', 'cards', 'wealth_catalog', 'wealth_positions', 'schedule_transfer', 'cancel_schedule', 'due_schedule', 'reserve_budget', 'prepare_merchant_order', 'merchant_catalog', 'life_event_plan', 'life_events', 'bill_report', 'request_handoff', 'sandbox_calc'].includes(a.type)) && /明天|后天|下周|下个月|每周|每月|定时|预约/.test(text)) {
         plan.actions = []; plan.question = '当前计划里含有不能自动延时的动作；预约只能创建明确时间的定时提醒，到期还需重新确认，不会将未来要求改成立即操作。';
+      }
+      // Model-written arithmetic runs in the Wasmtime sandbox outside the store transaction (it is async).
+      for (const a of plan.actions.filter(x => x.type === 'sandbox_calc')) {
+        this.store.transact(db => { const own = this.session(db, token); const now = this.now(); const recent = (own.recentCalculations || []).filter(at => at > now - 60000);
+          if (recent.length >= 8 || (own.calculationCount || 0) >= 100) fail('CALCULATION_LIMIT', '受限计算达到本会话配额；账务业务不受影响。', 429);
+          own.recentCalculations = [...recent, now]; own.calculationCount = (own.calculationCount || 0) + 1; return null; });
+        a.__calc = await runGenerated(a.expression);
       }
       if (plan.actions.length > 1 && plan.actions.some(a => a.type === 'cancel_task')) {
         plan.actions = [];
@@ -213,7 +239,19 @@ class BankService {
         s.history.push({ role: 'user', text, at: now, id: id() });
         audit(s, 'INTENT_PARSED', `${plan.meta.mode === 'ai' ? `${plan.meta.provider} 工具规划` : plan.meta.mode === 'manual' ? '用户填写业务面板（无模型）' : plan.meta.mode === 'rule' ? '规则解析（关键词直接命中查询，未调用模型）' : '离线固定案例'}：${plan.actions.map(a => a.type).join(' → ') || '澄清/不支持'}；仅提出草案，没有执行写操作。`, now);
         let results = [];
-        if (plan.actions.length > 1) {
+        if (plan.actions.length === 1 && plan.actions[0].type === 'life_event_plan') {
+          const expanded = lifeEvents.expandLifeEventPlan(plan.actions[0], s, now, text, { money });
+          if (expanded.clarify) results = [{ type: 'clarify', text: expanded.clarify }];
+          else {
+            if ((s.workflows || []).length >= 40) fail('WORKFLOW_LIMIT', '本会话工作流已达40个；历史记录保留，请继续已有工作流。', 429);
+            const flow = workflow.createWorkflow({ goal: expanded.goal, nodes: expanded.nodes }, now);
+            flow.kind = 'life_event'; flow.autoAdvance = true; flow.event = expanded.event;
+            (s.workflows ||= []).push(flow);
+            audit(s, 'WORKFLOW_CREATED', `跨场景计划 ${flow.id}：${expanded.goal}；${flow.nodes.length} 个节点（预留→两张订单→分别付款），每个写操作单独确认。`, now);
+            results = [{ type: 'life_plan', workflowId: flow.id, event: expanded.event, text: `已为${expanded.event.label}（${expanded.event.date}）拆好计划：现在锁定 ${money(expanded.event.cents)} → ${expanded.event.deliveryDate} 送达鲜花和蛋糕 → 分别付款。每一步都会单独请你确认。` },
+              ...this.progressWorkflow(s, flow, now, simulateTimeout === true)];
+          }
+        } else if (plan.actions.length > 1) {
           if ((s.workflows || []).length >= 40) fail('WORKFLOW_LIMIT', '本会话工作流已达40个；历史记录保留，请继续已有工作流。', 429);
           const flow = workflow.createWorkflow({ goal: text, actions: plan.actions }, now);
           (s.workflows ||= []).push(flow);
@@ -223,6 +261,9 @@ class BankService {
           try { results.push(this.prepare(s, action, now, simulateTimeout === true, admitted)); }
           catch (e) { if (!(e instanceof BankError)) throw e; results.push({ type: 'blocked', code: e.code, text: e.message }); audit(s, 'POLICY_BLOCKED', `${e.code}：${e.message}`, now); break; }
         }
+        for (const r of results) if (r.type === 'blocked') riskMonitor.record(s, 'blocked', now, { code: r.code });
+        const riskHit = this.#applyRisk(s, now);
+        if (riskHit) results.push({ type: 'blocked', code: 'RISK_LOCKED', text: `检测到异常行为（${riskHit.text}），敏感操作已暂停 10 分钟并转人工复核；查询仍可使用。` });
         const answer = results.length ? results.map(r => r.text).join('\n\n') : `需要补充信息 / 暂不支持：${plan.question || '请说明要查询或操作的业务。'}\n（此条模型说明未触发任何业务工具。）`;
         const message = { role: 'assistant', text: answer, at: now, id: id(), results, meta: plan.meta };
         s.history.push(message); s.history = s.history.slice(-40);
@@ -230,7 +271,8 @@ class BankService {
       });
     } catch (error) {
       if (['INVALID_AI_PLAN', 'DATE_CONTEXT_EXPIRED'].includes(error.code)) {
-        try { this.store.transact(db => { const s = this.session(db, token); s.plannerFeedback ||= []; if (s.plannerFeedback.length < 100) s.plannerFeedback.push({ id: id(), kind: 'model_failure', input: text.slice(0, 1000), code: error.code, provider: this.planner.provider || 'unknown', at: this.now(), status: 'UNREVIEWED', eligibleForPrompt: false }); }); } catch { /* Preserve original failure; never fabricate successful execution. */ }
+        try { this.store.transact(db => { const s = this.session(db, token); s.plannerFeedback ||= []; if (s.plannerFeedback.length < 100) s.plannerFeedback.push({ id: id(), kind: 'model_failure', input: text.slice(0, 1000), code: error.code, provider: this.planner.provider || 'unknown', at: this.now(), status: 'UNREVIEWED', eligibleForPrompt: false });
+          riskMonitor.record(s, 'blocked', this.now(), { code: error.code }); this.#applyRisk(s, this.now()); }); } catch { /* Preserve original failure; never fabricate successful execution. */ }
       }
       throw error;
     } finally { this.inFlight.delete(token); }
@@ -239,8 +281,10 @@ class BankService {
     const results = [];
     for (let step = 0; step < 12; step++) {
       const node = workflow.readyNodes(flow)[0]; if (!node) break;
+      const resolved = lifeEvents.resolveRefs(flow, node.action);
+      if (resolved.error) { workflow.failNode(flow, node.id, resolved.error, now); results.push({ type: 'blocked', code: 'WORKFLOW_REFERENCE_MISSING', text: resolved.error }); break; }
       try {
-        const result = this.prepare(s, node.action, now, simulateTimeout);
+        const result = this.prepare(s, resolved.action, now, simulateTimeout);
         if (result.type === 'proposal') {
           const task = this.task(s, result.taskId); task.workflowId = flow.id; task.nodeId = node.id;
           workflow.bindTask(flow, node.id, task, now); results.push(result); break;
@@ -268,9 +312,19 @@ class BankService {
           audit(s, 'WORKFLOW_APPROVAL_EXPIRED', '上次草案已过期；重新准备必须生成新任务和新授权。', now, pending.id);
         }
       }
+      if (action === 'rollback') {
+        const results = this.#rollback(s, flow, now);
+        audit(s, 'WORKFLOW_CONTROL', `${flowId}：rollback → 生成补偿流程`, now);
+        return { workflow: structuredClone(flow), results, state: view(s, now) };
+      }
       if (['pause', 'handoff', 'cancel'].includes(action)) {
         if (action === 'cancel') workflow.cancelWorkflow(flow, now);
         else workflow.pauseWorkflow(flow, now, { handoff: action === 'handoff' });
+        if (action === 'handoff') {
+          const c = handoffs.openCase(s, { kind: 'workflow', sourceId: flow.id, reason: '用户在多步骤任务中请求人工接管', context: this.#flowContext(s, flow) }, now, id);
+          flow.handoff = { ...flow.handoff, caseId: c.id, status: 'QUEUED', note: `已转人工（${c.id}），自动执行已暂停；客服不能替你确认付款。` };
+          audit(s, 'HANDOFF_OPENED', `${c.id}：工作流 ${flow.id} 转人工，已完成步骤保留。`, now);
+        }
         for (const task of s.tasks.filter(t => t.workflowId === flowId && t.status === 'AWAITING_CONFIRMATION')) finishDraft(task, action === 'cancel' ? 'CANCELLED' : 'SUPERSEDED', now);
       } else if (action === 'resume') workflow.resumeWorkflow(flow, now);
       else if (action !== 'advance') fail('INVALID_WORKFLOW_CONTROL', '未知工作流操作。');
@@ -301,6 +355,32 @@ class BankService {
       audit(s, 'READ_WEALTH', `${a.type}：仅虚构产品或实际模拟持仓，不编收益。`, now);
       return read;
     }
+    if (a.type === 'life_events') {
+      const events = lifeEvents.upcomingEvents(s, now, 90);
+      audit(s, 'READ_LIFE_EVENTS', `查询重要日期：${events.length} 项。`, now);
+      return { type: 'life_events', risk: 'green', events, text: events.length ? `接下来 90 天：${events.map(e => `${e.label} ${e.date}（还有 ${e.daysLeft} 天）`).join('；')}。需要的话可以说"帮我准备${events[0].label}"。` : '接下来 90 天没有记录的重要日期。' };
+    }
+    if (a.type === 'bill_report') {
+      if (!REPORT_PERIODS.includes(a.period || 'this_month')) return { type: 'clarify', text: '账单报告支持本月、上月、今年、去年，请选一个。' };
+      const report = billReport(s.transactions, { period: a.period || 'this_month' }, now);
+      audit(s, 'READ_REPORT', `生成账单报告：${report.period}；来源记录 ${report.sourceRowIds.length} 条。`, now);
+      return report;
+    }
+    if (a.type === 'sandbox_calc') {
+      const c = a.__calc;
+      if (!c) return { type: 'clarify', text: '这条计算没有经过沙箱，已停止；请重新提问。' };
+      audit(s, 'GENERATED_CODE_EXECUTED', `模型生成的计算式经语法检查后编译为 WebAssembly，在隔离沙箱运行：${c.ok ? `结果 ${c.result}` : `未完成（${c.error?.code}）`}；代码SHA256=${c.codeHash || '未编译'}；结果不入账。`, now);
+      const value = c.ok ? Number(c.result) : null;
+      return { type: 'sandbox_calc', risk: 'green', label: a.label || '计算', expression: c.expression, wat: c.wat || null, codeHash: c.codeHash || null, ok: c.ok, result: c.result ?? null, error: c.error || null, metrics: c.metrics || null,
+        text: c.ok ? `${a.label || '计算结果'}：${Number.isSafeInteger(value) && Math.abs(value) < 1e11 ? `${c.result}（约 ${money(value)}）` : c.result}。由模型写出计算式、在隔离沙箱中执行，仅供参考，不会入账。` : `沙箱没有完成这次计算（${c.error?.message || c.error?.code}），没有给出任何数字。` };
+    }
+    if (a.type === 'request_handoff') {
+      const c = handoffs.openCase(s, { kind: 'chat', reason: (typeof a.reason === 'string' && a.reason.trim()) || '用户要求人工客服',
+        context: { lastUserText: (s.history.filter(m => m.role === 'user').at(-1)?.text || '').slice(0, 300), pendingTasks: s.tasks.filter(t => t.status === 'PENDING_REVIEW').map(t => ({ id: t.id, title: t.title })) } }, now, id);
+      audit(s, 'HANDOFF_OPENED', `${c.id}：对话转人工。`, now);
+      return { type: 'handoff', risk: 'green', caseId: c.id, text: `已为你转接人工客服（工单 ${c.id}）。客服可以查看本次对话和待办，但不能替你确认任何付款。` };
+    }
+    if (a.type === 'life_event_plan') return { type: 'clarify', text: '跨场景计划需要单独提出，例如"下个月15号是我爱人生日"。' };
     if (a.type === 'cancel_task') {
       const target = [...s.tasks].reverse().find(t => admitted.superseded?.includes(t.id) && t.status === 'SUPERSEDED');
       if (!target) return { type: 'clarify', text: '当前没有可取消的未执行草案；已完成或待对账交易不能当作未执行任务撤回。' };
@@ -354,6 +434,13 @@ class BankService {
       if (action.cents > available(s)) fail('INSUFFICIENT_FUNDS', `可用余额仅 ${money(available(s))}，无法转出 ${money(action.cents)}。`);
       this.checkReserve(s, action);
       title = `向${action.recipientName}（${action.recipientLast4}）转账 ${money(action.cents)}${action.reserveCents ? `；转账后至少保留 ${money(action.reserveCents)}` : ''}`;
+    } else if (a.type === 'request_reversal') {
+      const prepared = reversals.prepareReversal(s, a, now, { fail, money, id });
+      if (prepared.clarify) return { type: 'clarify', text: prepared.clarify };
+      ({ action, title } = prepared);
+    } else if (a.type === 'change_password') {
+      action = { type: 'change_password' };
+      title = `${s.tradePin ? '修改' : '设置'}模拟交易密码（新密码只在本页面输入，不经过对话或模型）`;
     } else if (['freeze_card', 'unfreeze_card', 'card_limit'].includes(a.type)) {
       const card = s.cards.find(c => c.last4 === a.cardLast4);
       if (!card) return { type: 'clarify', text: '请指定卡片尾号：日常消费卡 8806，线上购物卡 6219。不能根据模糊描述替你选择卡片。' };
@@ -365,7 +452,9 @@ class BankService {
     } else fail('UNSUPPORTED_ACTION', '该操作不在白名单中。');
     checkAccountAction(s,action,now,fail);
     const uncertain = Array.isArray(a.uncertain) ? [...new Set(a.uncertain.filter(f => typeof f === 'string'))].slice(0, 4) : [];
-    const task = { id: id(), title, action, uncertain, intentVersion: s.intentVersion || 0, status: 'AWAITING_CONFIRMATION', risk: level(s, action, now), createdAt: now, expiresAt: now + 10 * 60_000,
+    // input = the request in planner form, so a person can hand the same request back as a fresh draft.
+    const input = Object.fromEntries(Object.entries(a).filter(([k]) => !k.startsWith('__') && k !== 'uncertain'));
+    const task = { id: id(), title, action, input, uncertain, intentVersion: s.intentVersion || 0, status: 'AWAITING_CONFIRMATION', risk: level(s, action, now), createdAt: now, expiresAt: now + 10 * 60_000,
       fault: simulateTimeout && action.type === 'transfer' ? 'timeout' : null,
       steps: [{ label: '理解需求', state: 'done' }, { label: '校验账户与权限', state: 'done' }, { label: '等待用户确认', state: 'current' }, { label: '执行并核对回执', state: 'waiting' }] };
     s.tasks.push(task); audit(s, 'TASK_PROPOSED', `${title}；${task.risk === 'red' ? '红色强验证' : '黄色确认'}；尚未执行。${uncertain.length ? `模型标注需核对字段：${uncertain.join('、')}。` : ''}`, now, task.id);
@@ -395,11 +484,11 @@ class BankService {
       return { demoCode: code, expiresAt: t.challenge.expiresAt, warning: '这是页面内演示验证码，不是真实短信或多因素认证。' };
     });
   }
-  confirm(token, taskId, { confirmed, code } = {}) {
+  confirm(token, taskId, { confirmed, code, newPin } = {}) {
     return this.store.transact(db => {
       const s = this.session(db, token); const t = this.task(s, taskId);
       if (this.inFlight.has(token) && !['SUCCEEDED', 'PENDING_REVIEW'].includes(t.status)) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能确认旧草案。', 409);
-      return this.#confirmCore(s, t, this.now(), { confirmed, code });
+      return this.#confirmCore(s, t, this.now(), { confirmed, code, newPin });
     });
   }
   #verificationFailure(s, t, now, errorCode = 'INVALID_CODE') {
@@ -407,12 +496,15 @@ class BankService {
     if (s.authFailures >= 3) {
       s.lockedUntil = now + 300000; s.authFailures = 0;
       if (t) { delete t.challenge; delete t.passkeyPending; }
+      s.riskLock = { rule: 'VERIFICATION_FAILURES', text: '连续三次身份验证失败', at: now };
+      const c = handoffs.openCase(s, { kind: 'risk', sourceId: t?.id || null, reason: '连续三次身份验证失败，敏感操作已锁定', context: { taskTitle: t?.title || null } }, now, id);
+      audit(s, 'HANDOFF_OPENED', `${c.id}：验证失败锁定，转人工复核。`, now, t?.id);
     }
     const locked = s.lockedUntil > now;
     audit(s, 'VERIFICATION_REJECTED', locked ? '连续三次验证失败，敏感操作锁定 5 分钟。' : '设备验证失败，操作未执行。', now, t?.id);
     return { error: { code: locked ? 'SAFETY_LOCKED' : errorCode, message: locked ? '连续三次验证失败，敏感操作锁定 5 分钟。' : '身份验证失败，未执行操作；请重新获取本次任务的验证。', status: 403 }, state: view(s, now) };
   }
-  #confirmCore(s, t, now, { confirmed, code }, authentication = 'demo_otp') {
+  #confirmCore(s, t, now, { confirmed, code, newPin }, authentication = 'demo_otp') {
     if (['SUCCEEDED', 'PENDING_REVIEW'].includes(t.status)) return { task: publicTask(t, now), state: view(s, now), idempotent: true };
     this.check(s, t, now);
     if (confirmed !== true) fail('CONFIRMATION_REQUIRED', '必须明确确认这项操作。');
@@ -425,6 +517,7 @@ class BankService {
         if (t.challenge.hash !== tokenKey(`${t.id}:${code}`)) return this.#verificationFailure(s, t, now);
       }
     }
+    if (t.action.type === 'change_password') t.pendingPin = hashPin(newPin);
     if (t.action.type === 'transfer' && t.action.cents > available(s)) fail('INSUFFICIENT_FUNDS', '可用余额已变化，请重新发起任务。');
     if (t.action.type === 'transfer') this.checkReserve(s, t.action);
     if (t.risk === 'red') s.authFailures = 0;
@@ -438,6 +531,8 @@ class BankService {
       audit(s, 'TRANSFER_PENDING', '模拟网络超时；预留资金，不显示成功回执、不重复发起。', now, t.id);
     } else this.execute(s, t, now);
     this.settleWorkflow(s, t, now);
+    this.#autoAdvance(s, t, now);
+    this.#applyRisk(s, now);
     return { task: publicTask(t, now), state: view(s, now) };
   }
   #binding(token, t) {
@@ -516,7 +611,7 @@ class BankService {
       return { options: result.options, expiresAt: result.pending.expiresAt, task: publicTask(t, now), state: view(s, now) };
     });
   }
-  async passkeyConfirm(token, taskId, { response, confirmed } = {}) {
+  async passkeyConfirm(token, taskId, { response, confirmed, newPin } = {}) {
     const snapshot = this.session(this.store.read(), token); const prior = this.task(snapshot, taskId);
     if (['SUCCEEDED', 'PENDING_REVIEW'].includes(prior.status)) return { task: publicTask(prior, this.now()), state: view(snapshot, this.now()), idempotent: true };
     if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能确认旧草案。', 409);
@@ -548,7 +643,7 @@ class BankService {
       // Consumption, counter update and business mutation share this one commit.
       delete t.passkeyPending; s.passkeyCredential.counter = proof.newCounter;
       s.passkeyCredential.deviceType = proof.deviceType; s.passkeyCredential.backedUp = proof.backedUp;
-      return this.#confirmCore(s, t, now, { confirmed: true }, 'passkey');
+      return this.#confirmCore(s, t, now, { confirmed: true, newPin }, 'passkey');
     });
   }
   checkReserve(s, action, pendingTask) {
@@ -560,6 +655,14 @@ class BankService {
     checkAccountAction(s,a,now,fail,t.id);
     if (a.type === 'card_purchase') {
       t.result = executeCardPurchase(s, t, now, { cents, money, available, fail, id, audit });
+    } else if (a.type === 'request_reversal') {
+      t.result = reversals.executeReversal(s, t, now, { fail, money, id });
+      const c = handoffs.openCase(s, { kind: 'reversal', sourceId: t.result.reversal.id, reason: `撤回申请 ${t.result.reversal.id}：${money(a.cents)}，待人工受理`, context: { reversal: t.result.reversal, title: t.title } }, now, id);
+      t.result.caseId = c.id; audit(s, 'HANDOFF_OPENED', `${c.id}：撤回申请等待人工受理。`, now, t.id);
+    } else if (a.type === 'change_password') {
+      if (!t.pendingPin) fail('NEW_PIN_REQUIRED', '请在页面输入新的 6 位交易密码。');
+      s.tradePin = { ...t.pendingPin, updatedAt: now }; delete t.pendingPin;
+      t.result = { type: 'change_password', text: '模拟交易密码已更新。密码只以加盐哈希保存，没有出现在对话、模型或日志里。' };
     } else if (ADVANCED_TYPES.includes(a.type)) {
       t.result = executeAdvanced(s, t, now, { cents, money, available, fail, id, audit });
     } else if (BUSINESS_TYPES.includes(a.type)) {
@@ -574,17 +677,145 @@ class BankService {
       s.ledger.push({ id: id(), taskId: t.id, at: now, debitAccount: 'demo-owner', creditAccount: recipient.id, cents: a.cents });
       s.transactions.push({ id: `TX-${t.id.slice(0, 8)}`, date: day(now), merchant: recipient.name, category: '转账', cents: a.cents, type: 'transfer', source: '本地沙箱转账回执' });
       if (schedule) { schedule.status = 'COMPLETED'; schedule.revision += 1; schedule.completedAt = now; schedule.completedTaskId = t.id; }
+      riskMonitor.record(s, 'transfer_executed', now, { recipientId: recipient.id });
     } else {
       const card = s.cards.find(c => c.id === a.cardId);
       if (card.status !== a.expectedStatus) fail('CARD_STATE_CHANGED', '卡片状态发生变化，请重新发起任务。', 409);
       if (a.type === 'card_limit') card.limit = a.cents;
       else card.status = a.type === 'freeze_card' ? 'FROZEN' : 'ACTIVE';
     }
+    if (['transfer', 'pay_merchant_order', 'card_purchase'].includes(a.type) && Number.isSafeInteger(a.cents)) riskMonitor.record(s, 'outflow', now, { cents: a.cents });
     checkAccountBalance(s,fail);
     t.status = 'SUCCEEDED'; t.completedAt = now;
     t.receipt = { id: `RCPT-${t.id.slice(0, 10).toUpperCase()}`, at: now, summary: t.title, balanceAfter: s.balance, sandbox: true };
     t.steps = t.steps.map(step => ({ ...step, state: 'done' })); t.steps[3].label = '执行完成，回执已核对';
     audit(s, 'EXECUTION_SUCCEEDED', `${t.title}；回执 ${t.receipt.id}；仅本地模拟资金/卡片。`, now, t.id);
+  }
+  #applyRisk(s, now) {
+    if (!this.riskRules || s.lockedUntil > now) return null;
+    const hit = riskMonitor.evaluate(s, now, this.riskRules);
+    if (!hit) return null;
+    s.lockedUntil = now + this.riskRules.lockMs; s.riskLock = { ...hit, at: now };
+    riskMonitor.record(s, 'risk_locked', now, { rule: hit.rule });
+    for (const t of s.tasks) if (t.status === 'AWAITING_CONFIRMATION') finishDraft(t, 'SUPERSEDED', now);
+    const c = handoffs.openCase(s, { kind: 'risk', reason: `异常行为：${hit.text}`, context: { rule: hit.rule, recentEvents: riskMonitor.events(s).slice(-12) } }, now, id);
+    audit(s, 'RISK_LOCKED', `${hit.rule}：${hit.text}。敏感操作暂停 ${Math.round(this.riskRules.lockMs / 60000)} 分钟，转人工 ${c.id}；查询不受影响。`, now);
+    return hit;
+  }
+  #autoAdvance(s, t, now) {
+    const flow = t.workflowId && (s.workflows || []).find(f => f.id === t.workflowId);
+    if (!flow?.autoAdvance || flow.status !== 'READY' || t.status !== 'SUCCEEDED') return;
+    if (s.tasks.some(x => x.status === 'AWAITING_CONFIRMATION')) return;
+    try { this.progressWorkflow(s, flow, now); } catch (e) { if (!(e instanceof BankError)) throw e; }
+  }
+  #flowContext(s, flow) {
+    return { goal: flow.goal, kind: flow.kind || 'workflow', nodes: flow.nodes.map(n => ({ id: n.id, type: n.action.type, status: n.status, receiptId: n.receiptId || null, error: n.error || null })) };
+  }
+  // 回退: compensate finished steps in reverse order. Every compensation is a new task the user confirms.
+  #rollback(s, flow, now) {
+    if (flow.compensatedBy) fail('ROLLBACK_EXISTS', '这项任务已经生成过回退流程。', 409);
+    if (!['SUCCEEDED', 'CANCELLED', 'NEEDS_ATTENTION', 'PAUSED', 'HANDOFF'].includes(flow.status)) workflow.cancelWorkflow(flow, now);
+    if (flow.status !== 'CANCELLED' && flow.status !== 'SUCCEEDED') {
+      for (const n of flow.nodes) if (!['SUCCEEDED', 'WAITING_SETTLEMENT'].includes(n.status)) n.status = 'CANCELLED';
+      if (flow.nodes.some(n => n.status === 'WAITING_SETTLEMENT')) fail('WORKFLOW_PENDING_SETTLEMENT', '还有待对账的步骤，请先核对结果再回退。', 409);
+      flow.status = 'CANCELLED'; flow.revision += 1; flow.events.push({ at: now, event: 'WORKFLOW_CANCELLED', detail: '回退前停止尚未执行的步骤。' });
+    }
+    for (const t of s.tasks.filter(x => x.workflowId === flow.id && x.status === 'AWAITING_CONFIRMATION')) finishDraft(t, 'CANCELLED', now);
+    // Newest first; for steps finished at the same instant, later graph position first.
+    const done = flow.nodes.filter(n => n.status === 'SUCCEEDED').reverse().sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+    const steps = []; const manual = [];
+    for (const n of done) {
+      const a = n.action; const r = n.result || {};
+      if (['balance', 'analyze', 'transactions', 'cards', 'merchant_catalog', 'wealth_catalog', 'wealth_positions', 'subscription_query', 'due_schedule', 'life_events', 'bill_report'].includes(a.type)) continue;
+      if (a.type === 'transfer' || a.type === 'pay_merchant_order') steps.push({ type: 'request_reversal', receiptId: n.receiptId });
+      else if (a.type === 'prepare_merchant_order' && s.advanced?.orders.find(o => o.id === r.order?.id)?.status === 'PREPARED') steps.push({ type: 'cancel_merchant_order', orderId: r.order.id });
+      else if (a.type === 'reserve_budget' && s.advanced?.budgets.find(b => b.id === r.budget?.id)?.status === 'ACTIVE') steps.push({ type: 'release_budget', budgetId: r.budget.id, __last: true });
+      else if (a.type === 'freeze_card') steps.push({ type: 'unfreeze_card', cardLast4: a.cardLast4 });
+      else if (a.type === 'unfreeze_card') steps.push({ type: 'freeze_card', cardLast4: a.cardLast4 });
+      else if (a.type === 'temporary_lock_card') steps.push({ type: 'unlock_card', cardLast4: a.cardLast4 });
+      else if (a.type === 'prepare_merchant_order' || a.type === 'reserve_budget') continue;
+      else manual.push(`${a.type}（${n.id}）`);
+    }
+    // Release the budget after its orders are cancelled / refunds requested.
+    steps.sort((x, y) => (x.__last ? 1 : 0) - (y.__last ? 1 : 0)); for (const x of steps) delete x.__last;
+    flow.events.push({ at: now, event: 'ROLLBACK_REQUESTED', detail: `${steps.length} 个补偿步骤${manual.length ? `；需人工处理：${manual.join('、')}` : ''}` });
+    if (!steps.length) {
+      flow.compensatedBy = 'NONE';
+      return [{ type: 'clarify', text: manual.length ? `这些步骤不能自动回退，需要人工处理：${manual.join('、')}。` : '这项任务没有已完成的写操作，无需回退。' }];
+    }
+    const comp = workflow.createWorkflow({ goal: `回退：${flow.goal}`, nodes: steps.map((action, i) => ({ id: `undo-${i + 1}`, action, dependsOn: i ? [`undo-${i}`] : [] })) }, now);
+    comp.kind = 'compensation'; comp.autoAdvance = true; comp.compensates = flow.id; flow.compensatedBy = comp.id;
+    (s.workflows ||= []).push(comp);
+    audit(s, 'ROLLBACK_CREATED', `为 ${flow.id} 生成补偿流程 ${comp.id}：${steps.map(x => x.type).join(' → ')}；每一步仍需确认，已付款只能申请撤回。`, now);
+    return [{ type: 'workflow', workflowId: comp.id, text: `已生成回退流程：${steps.length} 步，按与原来相反的顺序撤销。已付款的部分只能申请撤回，需要对方或银行同意。${manual.length ? `另有需人工处理：${manual.join('、')}。` : ''}` },
+      ...this.progressWorkflow(s, comp, now)];
+  }
+  // The user hands an unconfirmed draft to a person instead of confirming it.
+  taskHandoff(token, taskId) {
+    return this.store.transact(db => {
+      const s = this.session(db, token); const now = this.now(); const t = this.task(s, taskId);
+      if (t.status !== 'AWAITING_CONFIRMATION') fail('TASK_NOT_ACTIONABLE', '只有等待确认的草案可以转人工；已完成的交易请申请撤回。', 409);
+      finishDraft(t, 'SUPERSEDED', now);
+      const flow = t.workflowId && (s.workflows || []).find(f => f.id === t.workflowId);
+      if (flow && !['SUCCEEDED', 'CANCELLED'].includes(flow.status)) workflow.pauseWorkflow(flow, now, { handoff: true, reason: '用户把待确认步骤交给人工' });
+      const c = handoffs.openCase(s, flow ? { kind: 'workflow', sourceId: flow.id, reason: '用户把待确认步骤交给人工', context: this.#flowContext(s, flow) }
+        : { kind: 'task', sourceId: t.id, reason: '用户把待确认操作交给人工', context: { title: t.title, risk: t.risk, action: t.input || null } }, now, id);
+      if (flow) flow.handoff = { ...flow.handoff, caseId: c.id, status: 'QUEUED', note: `已转人工（${c.id}），自动执行已暂停；客服不能替你确认付款。` };
+      audit(s, 'HANDOFF_OPENED', `${c.id}：草案 ${t.id} 转人工，未执行。`, now, t.id);
+      return { handoff: structuredClone(c), state: view(s, now) };
+    });
+  }
+  // Human desk. A person can read the case, note, decide reversals, lift a risk lock, return work to the
+  // user as a fresh draft, or close it. A person never confirms a payment for the user.
+  handoffAction(token, caseId, { action, note, agent } = {}) {
+    if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划，请稍后处理。', 409);
+    // There is deliberately no 'confirm' or 'execute' here: a person cannot authorize money for the user.
+    if (!['claim', 'note', 'approve_reversal', 'reject_reversal', 'unlock', 'return', 'close'].includes(action)) fail('INVALID_HANDOFF_ACTION', '未知的人工操作。');
+    if (note !== undefined && (typeof note !== 'string' || note.length > 300 || hasPrivateData(note))) fail('INVALID_HANDOFF_NOTE', '备注最多 300 字，且不能包含真实账号或密钥。');
+    return this.store.transact(db => {
+      const s = this.session(db, token); const now = this.now(); const c = handoffs.findCase(s, caseId);
+      if (!c) fail('HANDOFF_NOT_FOUND', '找不到这张人工工单。', 404);
+      if (c.status === 'CLOSED') fail('HANDOFF_CLOSED', '这张工单已经关闭。', 409);
+      const by = typeof agent === 'string' && agent.trim() ? agent.trim().slice(0, 20) : '演示客服';
+      const say = text => c.notes.push({ at: now, by, text: String(text).slice(0, 300) });
+      let results = [];
+      if (action === 'claim') { if (c.status !== 'OPEN') fail('HANDOFF_ALREADY_CLAIMED', '工单已有人受理。', 409); c.status = 'CLAIMED'; c.agent = by; say(note || '已受理，正在核对。'); }
+      else if (action === 'note') { if (!note?.trim()) fail('INVALID_HANDOFF_NOTE', '请填写备注。'); say(note); }
+      else {
+        if (c.status !== 'CLAIMED') fail('HANDOFF_NOT_CLAIMED', '请先受理工单再处理。', 409);
+        if (action === 'approve_reversal' || action === 'reject_reversal') {
+          if (c.kind !== 'reversal') fail('INVALID_HANDOFF_ACTION', '只有撤回申请可以审批。');
+          const r = reversals.resolveReversal(s, c.sourceId, action === 'approve_reversal', now, { fail, money, id, checkBalance: draft => checkAccountBalance(draft, fail) }, { by, reason: note });
+          say(r.text); c.status = 'CLOSED'; c.resolution = action === 'approve_reversal' ? 'REVERSAL_APPROVED' : 'REVERSAL_REJECTED';
+          results.push({ type: 'reversal', text: r.text });
+          audit(s, action === 'approve_reversal' ? 'REVERSAL_APPROVED' : 'REVERSAL_REJECTED', `${c.id}：${r.text}`, now);
+        } else if (action === 'unlock') {
+          if (c.kind !== 'risk') fail('INVALID_HANDOFF_ACTION', '只有风控工单可以解除锁定。');
+          s.lockedUntil = 0; s.authFailures = 0; delete s.riskLock; riskMonitor.record(s, 'risk_locked', now, { rule: 'CLEARED_BY_AGENT' });
+          say(note || '已与用户核实身份，解除敏感操作锁定。'); c.status = 'CLOSED'; c.resolution = 'UNLOCKED';
+          audit(s, 'RISK_UNLOCKED_BY_AGENT', `${c.id}：${by}核实后解除锁定。`, now);
+        } else if (action === 'return') {
+          if (c.kind === 'workflow') {
+            const flow = (s.workflows || []).find(f => f.id === c.sourceId);
+            if (!flow) fail('WORKFLOW_NOT_FOUND', '原工作流不存在。', 404);
+            if (['PAUSED', 'HANDOFF', 'NEEDS_ATTENTION'].includes(flow.status)) { workflow.resumeWorkflow(flow, now); results = this.progressWorkflow(s, flow, now); }
+            if (flow.handoff) flow.handoff.status = 'RETURNED';
+          } else if (c.kind === 'task' && c.context?.action) {
+            if (s.lockedUntil > now) fail('SAFETY_LOCKED', '敏感操作仍在锁定期，不能重新发起。', 423);
+            results = [this.prepare(s, structuredClone(c.context.action), now, false)];
+          }
+          say(note || '已核对，交还给用户；需要用户本人重新确认。'); c.status = 'RETURNED';
+          audit(s, 'HANDOFF_RETURNED', `${c.id}：${by}交还用户；任何付款仍需用户本人确认。`, now);
+        } else if (action === 'close') {
+          if (c.kind === 'workflow') { const flow = (s.workflows || []).find(f => f.id === c.sourceId); if (flow && !['SUCCEEDED', 'CANCELLED'].includes(flow.status)) workflow.cancelWorkflow(flow, now); }
+          if (c.kind === 'reversal') fail('INVALID_HANDOFF_ACTION', '撤回申请需要通过或驳回，不能直接关闭。');
+          say(note || '已处理完毕。'); c.status = 'CLOSED'; c.resolution = 'CLOSED';
+          audit(s, 'HANDOFF_CLOSED', `${c.id}：${by}关闭工单。`, now);
+        } else fail('INVALID_HANDOFF_ACTION', '未知的人工操作。');
+      }
+      c.updatedAt = now;
+      return { handoff: structuredClone(c), results, state: view(s, now) };
+    });
   }
   reconcile(token, taskId) {
     return this.store.transact(db => {
