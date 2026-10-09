@@ -88,7 +88,7 @@ export default function MobileHomeV3({ state, pending, busy, onNavigate, onTrans
         {!recent.length && <p className="v2-empty">暂无模拟交易记录。</p>}
       </section>
       <p className="v3-notice"><span>公告</span>{noticeDate} · 演示系统，不接入真实银行与资金</p>
-      <p className="v2-footnote">FinPilot 演示银行 · 不关联真实银行或资金<br />客服热线 400-000-0000（虚构）· 本行不会索要验证码或密码</p>
+      <p className="v2-footnote">Orbit 演示银行 · 不关联真实银行或资金<br />客服热线 400-000-0000（虚构）· 本行不会索要验证码或密码</p>
     </section>
   );
 }

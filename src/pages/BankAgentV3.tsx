@@ -57,6 +57,8 @@ import {
   type BankSandboxResponse,
 } from "@/lib/bankApi";
 import "./bank-agent-v3.css";
+// Orbit mark (concept A, eccentric O): one even-odd path on a 256 grid. Source: review-2026-10-09/orbit-icon.
+const ORBIT_MARK = 'M24 128 A104 104 0 1 0 232 128 A104 104 0 1 0 24 128 Z M76 118 A66 66 0 1 0 208 118 A66 66 0 1 0 76 118 Z';
 import BankServices, { type ManualAction } from "./bank/BankServices";
 import PasskeyPanel from "./bank/PasskeyPanel";
 import { passkeyLocalUrl } from "@/lib/bankApi";
@@ -737,7 +739,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     }
   }, [applyState, handleError]);
   useEffect(() => {
-    document.title = "FinPilot · 银行版预览";
+    document.title = "Orbit · 演示银行";
     document.documentElement.lang = "zh-CN";
     void load();
   }, [load]);
@@ -1124,7 +1126,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     : "本月";
   return (
     <div className={`ba-root v2 v3 ${mobile ? `bm-app bm-tab-${tab}` : ''}`}>
-      {mobile && <header className="bm-header"><div>{['bills', 'cards', 'services'].includes(tab) ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : null}<strong>{({overview:'FinPilot 演示银行',assistant:'智能助手',audit:'待办事项',profile:'个人中心',bills:'交易明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
+      {mobile && <header className="bm-header"><div>{['bills', 'cards', 'services'].includes(tab) ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : null}{!['bills', 'cards', 'services'].includes(tab) && <svg className="v3-mark" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d={ORBIT_MARK} /></svg>}<strong>{({overview:'Orbit 演示银行',assistant:'智能助手',audit:'待办事项',profile:'个人中心',bills:'交易明细',cards:'卡片管理',services:'服务中心'})[tab]}</strong></div><span>模拟资金</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
       <aside className="ba-sidebar">
         <a className="ba-logo" href="/bank-agent" aria-label="FinPilot 首页">
           <span className="ba-logo-mark">
@@ -1434,7 +1436,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                         <div className="ba-mini-card">
                           <div>
                             <span>
-                              FinPilot <small>DEBIT · DEMO</small>
+                              Orbit <small>DEBIT · DEMO</small>
                             </span>
                             <CreditCard size={27} />
                           </div>
@@ -2023,7 +2025,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
               <footer className="ba-footer">
                 <span>
                   <Landmark size={13} />
-                  FinPilot Banking Lab · 国内赛题原型
+                  Orbit Banking Lab · 国内赛题原型
                 </span>
                 <span>
                   {mode === "ai" ? "真实 AI 规划" : "离线固定案例 · 非 AI"} ·

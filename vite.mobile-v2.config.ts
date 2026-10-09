@@ -12,7 +12,7 @@ export default defineConfig({
   root: path.resolve(__dirname, 'mobile-v2'),
   envDir: __dirname,
   plugins: [react()],
-  publicDir: false,
+  publicDir: path.resolve(__dirname, 'mobile/public'), // Orbit icon set + web manifest
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   server: { host: '127.0.0.1', port: 8092, strictPort: true, proxy },
   preview: { host: '127.0.0.1', port: 8092, strictPort: true, proxy },
