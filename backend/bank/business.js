@@ -217,7 +217,7 @@ function executeBusiness(s, task, now, tools) {
     const scored = scoreAnswers(a.answers, tools);
     if ((db.riskProfile?.revision || 0) !== a.expectedRevision) reject(tools, 'RISK_PROFILE_CHANGED', '教学风险问卷已经更新，请重新确认。', 409);
     db.riskProfile = { answers: [...a.answers], ...scored, questionnaireVersion: riskQuestionnaire.VERSION, source: { ...riskQuestionnaire.SOURCE }, assessedAt: now, expiresAt: now + 365 * DAY, revision: a.expectedRevision + 1, teachingOnly: true,
-      disclaimer: '仅参考苏州银行公开计分的独立模拟测评，非该行认证、非正式适当性评估。FinPilot另核验损失意愿与交易资金期限。' };
+      disclaimer: '仅参考苏州银行公开计分的独立模拟测评，非该行认证、非正式适当性评估。Orbit另核验损失意愿与交易资金期限。' };
     result = { type: a.type, profile: riskQuestionnaire.publicProfile(db.riskProfile,now), text: `模拟测评已确认：${scored.riskLabel}。${!scored.acceptsLoss ? '你的回答体现不希望本金损失，当前非保本模拟产品仍不可申购。' : ''}${db.riskProfile.disclaimer}` };
   } else if (a.type === 'wealth_buy') {
     const product = productById(a.productId, tools); integer(a.cents, tools); checkWealthInvariant(draft, tools);

@@ -29,7 +29,7 @@ function scoreRisk(answers) {
   const riskLevel = score <= 15 ? 1 : score <= 35 ? 2 : score <= 60 ? 3 : score <= 80 ? 4 : 5;
   return { score, riskLevel, riskLabel: `C${riskLevel} ${LABELS[riskLevel-1]}`,
     noInvestmentExperience: answers[3] === 'A' || answers[4] === 'A' || answers[5] === 'A',
-    // Separate FinPilot eligibility gates. Do NOT modify the bank's raw score or grade.
+    // Separate Orbit eligibility gates. Do NOT modify the bank's raw score or grade.
     acceptsLoss: !['A','B'].includes(answers[5]) && answers[9] !== 'A',
     horizonDays: [0,365,1095,1825][answers[7].charCodeAt(0)-65],
     method: '苏州银行V.202308公开分值相加，按原版C1–C5区间分级；非正式适当性评估。',
