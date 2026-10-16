@@ -79,7 +79,7 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
     res.redirect(303, '/team/login');
   });
   app.get('/team', (_req, res) => res.type('html').send('<!doctype html><meta charset="utf-8"><h1>Orbit 团队演示</h1><p>临时分享，仅模拟资金。</p><a href="/">返回演示</a><form method="post" action="/team/logout"><button>退出团队登录</button></form>'));
-  const bank = createBankApp({ store, planner, now, maxDailyCalls, limits: { maxSessions: 30, maxConcurrentPlans: 2 } });
+  const bank = createBankApp({ store, planner, now, maxDailyCalls, limits: { maxSessions: 30, maxConcurrentPlans: 2 }, webOrigin: origin });
   app.use((req, res, next) => {
     if (!req.path.startsWith('/api/')) return next();
     // Remote demo deliberately excludes native credential enrollment and code execution.
@@ -98,7 +98,7 @@ function createTeamShare({ origin, password, expiresAt, now = Date.now, store, p
   app.get(['/', '/mobile', '/bank-agent'], (_req, res) => res.sendFile(path.join(staticDir, 'index.html')));
   app.use((_req, res) => error(res, 404, 'NOT_FOUND', '页面不存在。'));
   app.use((err, _req, res, _next) => error(res, err.status || 500, 'SHARE_REQUEST_FAILED', '请求未完成，请稍后重试。'));
-  return { app, service: bank.service };
+  return { app, service: bank.service, im: bank.im };
 }
 
 if (require.main === module) {

@@ -18,10 +18,11 @@ async function main() {
   const store = createPgStore({ connectionString: process.env.DATABASE_URL });
   const loginStore = createPgStore({ connectionString: process.env.DATABASE_URL, key: 'team-logins' });
   const authSessions = persistentSessions(loginStore, createHash('sha256').update(password).digest('hex').slice(0, 24));
-  const { app } = createTeamShare({ origin, password, persistent: true, authSessions, store,
+  const { app, im } = createTeamShare({ origin, password, persistent: true, authSessions, store,
     staticDir: path.join(__dirname, '../dist-mobile'), maxDailyCalls: Number(process.env.BANK_MAX_AI_CALLS_PER_DAY || 20) });
   const server = app.listen(port, '0.0.0.0', () => { clearTimeout(watchdog); console.log('Orbit cloud gateway ready; Postgres persistence; simulated funds only.'); });
   server.requestTimeout = 70000; server.headersTimeout = 15000;
+  if (process.env.IM_CHANNEL === 'feishu') require('./im/start').startFeishu(im); // off unless configured
   const stop = () => { server.close(() => { store.close(); loginStore.close(); process.exit(0); }); setTimeout(() => process.exit(1), 25000).unref(); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }

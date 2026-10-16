@@ -14,7 +14,8 @@ function fixture({ file, maxDailyCalls = 80 } = {}) {
   let actions = [];
   const store = createBankStore(file);
   const planner = { configured: true, model: 'test-double-not-real-AI', plan: async () => ({ actions, question: '', meta: { mode: 'test', latencyMs: 0, totalTokens: 0 } }) };
-  const service = new BankService({ store, planner, now: () => time, maxDailyCalls });
+  // antiFraud off: these tests are about balances and reserves; the questionnaire has its own tests.
+  const service = new BankService({ store, planner, now: () => time, maxDailyCalls, antiFraud: false });
   const { token } = service.create();
   return { service, store, planner, token, tick: (ms = 2000) => time += ms,
     async plan(nextActions, opts = {}) { actions = nextActions; time += 2000; return service.chat(token, { text: '测试输入（非真实 AI）', ...opts }); },

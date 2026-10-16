@@ -86,6 +86,21 @@ export default function MobileHomeV3({ state, pending, busy, onNavigate, onTrans
           <ArrowRight size={16} />
         </button>
       )}
+      {/* 主动提醒 (learned from Erica / Eno): rule-based, each names its evidence, buttons only navigate. */}
+      {(state.insights || []).length > 0 && (
+        <section className="v3-insights" aria-label="提醒">
+          <h2>提醒你注意</h2>
+          <ul>
+            {(state.insights || []).map(item => (
+              <li key={item.id}>
+                <strong>{item.title}</strong>
+                <span>{item.detail}</span>
+                <button onClick={() => onNavigate(item.action.nav)}>{item.action.label}<ArrowRight size={14} /></button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section className="v2-ledger" aria-label="最近账单">
         <header>
           <h2>交易明细</h2>

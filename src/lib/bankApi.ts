@@ -60,6 +60,7 @@ export interface BankTask {
   steps: { label: string; state: string }[];
   uncertain?: string[];
   input?: Record<string, unknown>;
+  fraudCheck?: { status: "REQUIRED" | "COOLING" | "FLAGGED" | "PASSED"; questions: string[]; coolingUntil?: number };
   receipt?: {
     id: string;
     at: number;
@@ -177,6 +178,7 @@ export interface BankHandoff {
   notes: { at: number; by: string; text: string }[];
   resolution: string | null;
   note: string;
+  summary?: string;
 }
 export interface BankReversal {
   id: string;
@@ -309,6 +311,7 @@ export interface BankState {
   reversals?: BankReversal[];
   tradePinSet?: boolean;
   riskLock?: { rule: string; text: string; at: number } | null;
+  insights?: { id: string; kind: string; title: string; detail: string; action: { label: string; nav: string } }[];
 }
 export interface BankAdvanced {
   requests: {

@@ -131,6 +131,7 @@ export function HandoffDesk({ handoffs, reversals, busy, onAction }: {
             <li key={c.id} className={`v3-case ${c.status.toLowerCase()}`} data-testid={`case-${c.id}`}>
               <header><span>{KIND[c.kind] || c.kind} · {c.id}</span><b>{CASE_STATE[c.status]}</b></header>
               <p className="v3-case-reason">{c.reason}</p>
+              {c.summary && <p className="v3-case-summary"><b>交接摘要</b>{c.summary}</p>}
               <dl>
                 <dt>提交</dt><dd>{when(c.createdAt)}</dd>
                 {c.agent && <><dt>受理人</dt><dd>{c.agent}</dd></>}
@@ -211,4 +212,30 @@ export function ExtraResult({ result }: { result: BankResult }) {
     );
   }
   return null;
+}
+
+// Learned from Maybe Finance's assistant: say exactly which data an answer covers, generated from the
+// tool result (never written by the model), and offer the next questions as buttons instead of prose.
+export function ScopeLine({ result, at }: { result: BankResult; at: number }) {
+  const time = new Date(at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const rows = result.sourceRowIds?.length ?? result.rows?.length;
+  if (!["analysis", "transactions", "report", "balance", "cards", "life_events"].includes(result.type)) return null;
+  return (
+    <p className="v3-scope">
+      数据范围：{result.period ? `${result.period} · ` : ""}{rows != null ? `${rows} 条账本记录 · ` : ""}截至 {time} · 由后台账本计算，非模型生成
+    </p>
+  );
+}
+export type FollowUp = { text: string; demo?: string };
+export function followUps(results: BankResult[] = []): FollowUp[] {
+  const types = new Set(results.map((r) => r.type));
+  if (types.has("proposal") || types.has("life_plan")) return [];
+  if (types.has("report")) return [{ text: "上个月的账单报告" }, { text: "我有哪些订阅和代扣", demo: "subscriptions" }];
+  if (types.has("analysis")) return [{ text: "这个月的账单报告" }, { text: "查看交易记录" }];
+  if (types.has("transactions")) return [{ text: "这个月消费" }, { text: "这个月的账单报告" }];
+  if (types.has("balance")) return [{ text: "这个月花了多少" }, { text: "下个月15号是我爱人生日，帮我提前准备", demo: "life_event" }];
+  if (types.has("cards")) return [{ text: "帮我挂失冻结尾号 8806 的卡", demo: "freeze" }];
+  if (types.has("life_events")) return [{ text: "下个月15号是我爱人生日，帮我提前准备", demo: "life_event" }];
+  if (types.has("blocked") || types.has("clarify")) return [{ text: "我想找人工客服", demo: "handoff" }];
+  return [];
 }

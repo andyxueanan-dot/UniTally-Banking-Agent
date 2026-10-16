@@ -6,11 +6,15 @@ const { createBankStore } = require('./bank/store');
 const { plannerFromEnvironment } = require('./bank/planner');
 const { BankService } = require('./bank/service');
 const { runWasmCalculation, LIMITS } = require('./bank/code-sandbox');
+const { createImGateway } = require('./im/gateway');
+const { randomBytes } = require('node:crypto');
 
-function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk, passkeyOrigin = 'http://localhost:5091' } = {}) {
+function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk, passkeyOrigin = 'http://localhost:5091', webOrigin = process.env.IM_WEB_ORIGIN || '' } = {}) {
   const app = express();
   const service = new BankService({ store: store || createBankStore(process.env.BANK_DATA_PATH || path.join(__dirname, 'data', 'bank-agent.json')),
     planner: planner || plannerFromEnvironment(), now, limits, passkeySdk, passkeyOrigin, maxDailyCalls: maxDailyCalls ?? Number(process.env.BANK_MAX_AI_CALLS_PER_DAY || 80) });
+  // One IM gateway per app: the Feishu transport (if configured) and the web simulator share it.
+  const im = createImGateway({ service, webOrigin, now: now || Date.now, channelName: process.env.IM_CHANNEL === 'feishu' ? '飞书' : '飞书（模拟器）' });
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.set('X-Content-Type-Options', 'nosniff'); res.set('Referrer-Policy', 'no-referrer'); res.set('X-Frame-Options', 'DENY');
@@ -60,6 +64,18 @@ function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk,
   app.post('/api/bank/passkey/register/verify', wrap(async (req, res) => result(req, res, await service.passkeyRegistrationVerify(token(req), req.body))));
   app.post('/api/bank/tasks/:id/passkey/options', wrap(async (req, res) => result(req, res, await service.passkeyOptions(token(req), req.params.id))));
   app.post('/api/bank/tasks/:id/passkey/confirm', wrap(async (req, res) => result(req, res, await service.passkeyConfirm(token(req), req.params.id, req.body))));
+  app.get('/api/bank/im/status', wrap((req, res) => send(req, res, im.status(token(req)))));
+  app.post('/api/bank/im/bind/preview', wrap((req, res) => send(req, res, im.bindPreview(token(req), req.body?.code))));
+  app.post('/api/bank/im/bind/confirm', wrap((req, res) => send(req, res, im.bindConfirm(token(req), req.body?.code))));
+  app.post('/api/bank/im/unbind', wrap((req, res) => send(req, res, im.unbind(token(req)))));
+  // Simulator: the caller plays an IM user (separate identity per web session) through the very same gateway.
+  app.post('/api/bank/im/sim', wrap(async (req, res) => {
+    const key = service.sk(token(req)); const text = req.body?.text;
+    if (typeof text !== 'string' || !text.trim() || text.length > 500) return res.status(400).json({ code: 'INVALID_MESSAGE', message: '请输入 1～500 字。' });
+    const replies = await im.handleInbound({ channel: 'sim', appId: 'simulator', openId: `sim_${key.slice(0, 12)}`, chatId: `simchat_${key.slice(0, 12)}`, chatType: 'p2p', messageId: randomBytes(8).toString('hex'), displayName: '模拟器用户', text });
+    send(req, res, { replies: replies.map(r => r.text), status: im.status(token(req)) });
+  }));
+  app.post('/api/bank/tasks/:id/fraud-check', wrap((req, res) => send(req, res, service.fraudAnswer(token(req), req.params.id, req.body))));
   app.post('/api/bank/tasks/:id/handoff', wrap((req, res) => send(req, res, service.taskHandoff(token(req), req.params.id))));
   app.post('/api/bank/handoffs/:id/:action', wrap((req, res) => send(req, res, service.handoffAction(token(req), req.params.id, { action: req.params.action, note: req.body?.note, agent: req.body?.agent }))));
   for (const name of ['challenge', 'confirm', 'cancel', 'reconcile']) {
@@ -77,11 +93,12 @@ function createBankApp({ store, planner, now, maxDailyCalls, limits, passkeySdk,
     const status = err.status || (err.code?.startsWith('AI_') || err.code === 'INVALID_AI_PLAN' ? 503 : 500);
     res.status(status).json({ code: err.code || 'INTERNAL_ERROR', message: status === 500 ? '后台暂时出错，没有生成成功回执。请刷新查询状态。' : err.message });
   });
-  return { app, service };
+  return { app, service, im };
 }
 if (require.main === module) {
-  const { app } = createBankApp();
+  const { app, im } = createBankApp();
   const port = Number(process.env.BANK_PORT || 5091);
+  if (process.env.IM_CHANNEL === 'feishu') require('./im/start').startFeishu(im);
   app.listen(port, '127.0.0.1', () => console.log(`UniTally banking sandbox: http://127.0.0.1:${port}/bank-agent (fictional data only)`));
 }
 module.exports = { createBankApp };

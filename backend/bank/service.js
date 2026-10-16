@@ -1,4 +1,4 @@
-const { randomBytes, randomInt, createHash, scryptSync } = require('node:crypto');
+const { randomBytes, randomInt, createHash, scryptSync, timingSafeEqual } = require('node:crypto');
 const { seedSession, monthKey } = require('./seed');
 const { validatePlan, DEMOS } = require('./planner');
 const { rulePlan } = require('./rule-plan');
@@ -10,6 +10,8 @@ const handoffs = require('./handoff');
 const riskMonitor = require('./risk-monitor');
 const reversals = require('./reversal');
 const { runGenerated } = require('./generated-code');
+const antiFraud = require('./anti-fraud');
+const { buildInsights } = require('./insights');
 const { createPasskey } = require('./passkey');
 const workflow = require('./workflow');
 const { BUSINESS_TYPES, publicBusinessState, prepareBusiness, executeBusiness } = require('./business');
@@ -21,6 +23,10 @@ const { TYPES: ACCOUNT_TYPES, publicAccountPolicy, checkAccountAction, checkAcco
 const { validateCardPurchase, prepareCardPurchase, executeCardPurchase } = require('./card-payment');
 const id = () => randomBytes(12).toString('hex');
 const tokenKey = token => createHash('sha256').update(token).digest('hex');
+// In-process callers (the IM gateway) address a session by its stored key instead of the raw bearer
+// token, which the gateway must never keep. A Symbol-keyed object cannot be produced from HTTP/JSON.
+const INTERNAL = Symbol('orbit.internalSession');
+const internalRef = key => Object.freeze({ [INTERNAL]: key });
 const money = cents => `¥${(cents / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const day = now => new Date(now + 8 * 3600_000).toISOString().slice(0, 10);
 
@@ -53,6 +59,11 @@ function hashPin(pin) {
   const salt = randomBytes(16).toString('hex');
   return { salt, hash: scryptSync(pin, salt, 32).toString('hex'), algorithm: 'scrypt' };
 }
+function checkPin(stored, pin) {
+  if (typeof pin !== 'string' || !/^\d{6}$/.test(pin)) return false;
+  const a = Buffer.from(scryptSync(pin, stored.salt, 32).toString('hex')); const b = Buffer.from(stored.hash);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 function audit(s, event, detail, now, taskId) {
   s.audit.push({ id: id(), at: now, event, detail, taskId: taskId || null });
 }
@@ -74,22 +85,29 @@ function view(s, now) {
     tasks: s.tasks.map(t => publicTask(t, now)).reverse(), audit: s.audit.slice(-120).reverse(),
     history: s.history.slice(-40), feedbackCount: (s.plannerFeedback || []).length, workflows: s.workflows || [], business: publicBusinessState(s, now), advanced: publicAdvancedState(s, now), lockedUntil: s.lockedUntil, ledger: s.ledger.slice(-50), sandbox: true,
     lifeEvents: lifeEvents.ensureLifeEvents(s, now), upcomingEvents: lifeEvents.upcomingEvents(s, now), handoffs: handoffs.publicHandoffs(s), reversals: structuredClone(reversals.ensureReversals(s)).reverse(),
-    tradePinSet: Boolean(s.tradePin), riskLock: s.riskLock && s.lockedUntil > now ? s.riskLock : null };
+    tradePinSet: Boolean(s.tradePin), riskLock: s.riskLock && s.lockedUntil > now ? s.riskLock : null,
+    insights: buildInsights(s, now, { subscriptions: publicBusinessState(s, now).subscriptions, available: available(s) }) };
 }
 
+const FRAUD_META = Object.freeze({ mode: 'manual', provider: '反诈问询（固定规则，未调用 AI）', latencyMs: 0, totalTokens: 0 });
 class BankService {
-  constructor({ store, planner, now = Date.now, maxDailyCalls = 80, limits = {}, passkeySdk, passkeyOrigin = 'http://localhost:5091', ruleFastPath = true, riskRules = {} }) {
+  constructor({ store, planner, now = Date.now, maxDailyCalls = 80, limits = {}, passkeySdk, passkeyOrigin = 'http://localhost:5091', ruleFastPath = true, riskRules = {}, antiFraud: antiFraudOn = true }) {
     this.store = store; this.planner = planner; this.now = now; this.maxDailyCalls = maxDailyCalls; this.ruleFastPath = ruleFastPath === true;
     // riskRules:false switches the behaviour monitor off (used by tests that are about something else).
     this.riskRules = riskRules === false ? null : { ...riskMonitor.DEFAULT_RULES, ...riskRules };
+    this.antiFraud = antiFraudOn !== false;
     this.passkey = createPasskey({ sdk: passkeySdk, now, origin: passkeyOrigin });
     this.inFlight = new Set();
     this.limits = { maxSessions: 100, maxTasks: 300, maxCommands: 1000, commandsPerMinute: 20, sessionCreatesPerMinute: 10, maxConcurrentPlans: 4, challengesPerTask: 5, passkeyRegistrations: 5, aiCallsPerSession: 40, ...limits };
     for (const [key, value] of Object.entries(this.limits)) if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`Invalid resource limit: ${key}`);
   }
-  session(state, token) {
+  sk(token) {
+    if (token && typeof token === 'object' && typeof token[INTERNAL] === 'string') return token[INTERNAL];
     if (typeof token !== 'string' || token.length !== 64) fail('SESSION_REQUIRED', '演示会话已失效，请创建新的演示账户。', 401);
-    const s = state.sessions[tokenKey(token)];
+    return tokenKey(token);
+  }
+  session(state, token) {
+    const s = state.sessions[this.sk(token)];
     if (!s) fail('SESSION_REQUIRED', '找不到这个演示会话，请创建新的演示账户。', 401);
     s.passkeyOrigin = this.passkey.origin;
     return s;
@@ -173,7 +191,7 @@ class BankService {
     if (demo !== undefined && !Object.hasOwn(DEMOS, demo)) fail('INVALID_DEMO', '没有这个离线演示。');
     // Secrets and plausible real account data are not sent to the provider.
     if (hasPrivateData(text)) fail('PRIVATE_DATA_BLOCKED', '请勿输入 API 密钥、手机号或银行卡号。这个原型只接受虚构姓名、金额和卡片尾号。');
-    if (this.inFlight.has(token)) fail('BUSY', '上一条需求还在处理中，请稍等。', 409);
+    if (this.inFlight.has(this.sk(token))) fail('BUSY', '上一条需求还在处理中，请稍等。', 409);
     if (this.inFlight.size >= this.limits.maxConcurrentPlans) fail('PLANNING_LIMIT', '本机正在处理其他演示请求，请稍后再试。', 429);
     const admitted = this.store.transact(db => {
       const s = this.session(db, token); const now = this.now();
@@ -193,7 +211,7 @@ class BankService {
       audit(s, 'INTENT_ACCEPTED', `意图版本 ${s.intentVersion}；开始规划前已使旧草案失效。`, now);
       return { version: s.intentVersion, superseded };
     });
-    this.inFlight.add(token);
+    this.inFlight.add(this.sk(token));
     try {
       let plan;
       const planningNow = this.now();
@@ -212,6 +230,14 @@ class BankService {
       }
       if (!['simulate_aa_payment', 'card_purchase'].includes(manualAction?.type)) validatePlan(plan);
       if (!manualAction && !demo) plan = enforceTemporalPlan(plan, text, planningNow, this.now());
+      // 答后对账 (WeBank's "先查后答、答后对账"): every number the model writes must be traceable to the
+      // user's words or the account snapshot it was given; otherwise its sentence is not shown.
+      let reconciled = null;
+      if (plan.meta?.mode === 'ai' && plan.question) {
+        const corpus = text + JSON.stringify(plannerContext(snapshot, planningNow));
+        const unknown = [...new Set((plan.question.match(/\d[\d,.]*\d|\d/g) || []).map(n => n.replace(/,/g, '')))].filter(n => n.length >= 2 && !corpus.includes(n));
+        if (unknown.length) { reconciled = unknown; plan = { ...plan, question: '模型的回答里出现了无法与账户数据核对的数字，按"答后对账"规则已隐去。请换个说法，或直接告诉我要办什么。' }; }
+      }
       if (!manualAction && plan.actions.some(a => a.type === 'risk_assessment')) plan = { ...plan, actions: [], question: '风险问卷必须由本人在模拟理财表单逐题选择并确认；AI不代填，也不自动提高风险等级。' };
       if (plan.actions.some(a => a.type === 'transfer' && !a.reserveAmount) && /保留|留够|留出|预留|至少.{0,8}(?:剩|留)|(?:剩|留).{0,8}至少|keep.{0,20}(?:balance|remaining)|reserve/i.test(normalized(text))) {
         plan.actions = []; plan.question = '你提出了转账后的保留余额条件，但尚未明确提取出最低保留金额。请明确人民币转账金额与转账后至少保留多少元；不会忽略这个条件。';
@@ -237,6 +263,7 @@ class BankService {
         const s = this.session(db, token); const now = this.now();
         if (s.intentVersion !== admitted.version) fail('INTENT_CHANGED', '需求已变化，本次旧规划不会生成操作。', 409);
         s.history.push({ role: 'user', text, at: now, id: id() });
+        if (reconciled) audit(s, 'NUMBER_RECONCILE_BLOCKED', `模型说明中的数字 ${reconciled.join('、')} 无法在用户原话或账户快照中找到，已不展示。`, now);
         audit(s, 'INTENT_PARSED', `${plan.meta.mode === 'ai' ? `${plan.meta.provider} 工具规划` : plan.meta.mode === 'manual' ? '用户填写业务面板（无模型）' : plan.meta.mode === 'rule' ? '规则解析（关键词直接命中查询，未调用模型）' : '离线固定案例'}：${plan.actions.map(a => a.type).join(' → ') || '澄清/不支持'}；仅提出草案，没有执行写操作。`, now);
         let results = [];
         if (plan.actions.length === 1 && plan.actions[0].type === 'life_event_plan') {
@@ -275,7 +302,7 @@ class BankService {
           riskMonitor.record(s, 'blocked', this.now(), { code: error.code }); this.#applyRisk(s, this.now()); }); } catch { /* Preserve original failure; never fabricate successful execution. */ }
       }
       throw error;
-    } finally { this.inFlight.delete(token); }
+    } finally { this.inFlight.delete(this.sk(token)); }
   }
   progressWorkflow(s, flow, now, simulateTimeout = false) {
     const results = [];
@@ -301,7 +328,7 @@ class BankService {
     return results;
   }
   workflowControl(token, flowId, action) {
-    if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划，请稍后管理工作流。', 409);
+    if (this.inFlight.has(this.sk(token))) fail('PLANNING_IN_PROGRESS', '新需求正在规划，请稍后管理工作流。', 409);
     return this.store.transact(db => {
       const s = this.session(db, token); const now = this.now(); const flow = (s.workflows || []).find(f => f.id === flowId);
       if (!flow) fail('WORKFLOW_NOT_FOUND', '当前会话没有这项工作流。', 404);
@@ -376,7 +403,7 @@ class BankService {
     }
     if (a.type === 'request_handoff') {
       const c = handoffs.openCase(s, { kind: 'chat', reason: (typeof a.reason === 'string' && a.reason.trim()) || '用户要求人工客服',
-        context: { lastUserText: (s.history.filter(m => m.role === 'user').at(-1)?.text || '').slice(0, 300), pendingTasks: s.tasks.filter(t => t.status === 'PENDING_REVIEW').map(t => ({ id: t.id, title: t.title })) } }, now, id);
+        context: { lastUserText: (s.history.filter(m => m.role === 'user' && !m.text.startsWith('业务面板提交')).at(-1)?.text || '（用户直接点了按钮，没有输入文字）').slice(0, 300), pendingTasks: s.tasks.filter(t => t.status === 'PENDING_REVIEW').map(t => ({ id: t.id, title: t.title })) } }, now, id);
       audit(s, 'HANDOFF_OPENED', `${c.id}：对话转人工。`, now);
       return { type: 'handoff', risk: 'green', caseId: c.id, text: `已为你转接人工客服（工单 ${c.id}）。客服可以查看本次对话和待办，但不能替你确认任何付款。` };
     }
@@ -457,6 +484,7 @@ class BankService {
     const task = { id: id(), title, action, input, uncertain, intentVersion: s.intentVersion || 0, status: 'AWAITING_CONFIRMATION', risk: level(s, action, now), createdAt: now, expiresAt: now + 10 * 60_000,
       fault: simulateTimeout && action.type === 'transfer' ? 'timeout' : null,
       steps: [{ label: '理解需求', state: 'done' }, { label: '校验账户与权限', state: 'done' }, { label: '等待用户确认', state: 'current' }, { label: '执行并核对回执', state: 'waiting' }] };
+    if (this.antiFraud && antiFraud.needsCheck(s, action)) task.fraudCheck = { status: 'REQUIRED', questions: [...antiFraud.QUESTIONS] };
     s.tasks.push(task); audit(s, 'TASK_PROPOSED', `${title}；${task.risk === 'red' ? '红色强验证' : '黄色确认'}；尚未执行。${uncertain.length ? `模型标注需核对字段：${uncertain.join('、')}。` : ''}`, now, task.id);
     if (action.scheduleId) s.advanced.schedules.find(item => item.id === action.scheduleId).activeTaskId = task.id;
     return { type: 'proposal', taskId: task.id, text: `已准备：${title}。${task.risk === 'red' ? s.passkeyCredential ? '需要确认详情并使用已注册 Passkey 验证设备' : '需要确认详情并完成演示身份验证' : '需要你确认详情'}，目前没有执行。${task.fault ? '本次将演示接口超时与后续对账。' : ''}` };
@@ -469,7 +497,7 @@ class BankService {
     if ((t.intentVersion || 0) !== (s.intentVersion || 0)) fail('INTENT_CHANGED', '需求已变化，旧任务不能继续确认。', 409);
   }
   challenge(token, taskId) {
-    if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能继续验证旧草案。', 409);
+    if (this.inFlight.has(this.sk(token))) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能继续验证旧草案。', 409);
     const now = this.now();
     return this.store.transact(db => {
       const s = this.session(db, token); const t = this.task(s, taskId); this.check(s, t, now);
@@ -484,11 +512,11 @@ class BankService {
       return { demoCode: code, expiresAt: t.challenge.expiresAt, warning: '这是页面内演示验证码，不是真实短信或多因素认证。' };
     });
   }
-  confirm(token, taskId, { confirmed, code, newPin } = {}) {
+  confirm(token, taskId, { confirmed, code, newPin, pin } = {}) {
     return this.store.transact(db => {
       const s = this.session(db, token); const t = this.task(s, taskId);
-      if (this.inFlight.has(token) && !['SUCCEEDED', 'PENDING_REVIEW'].includes(t.status)) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能确认旧草案。', 409);
-      return this.#confirmCore(s, t, this.now(), { confirmed, code, newPin });
+      if (this.inFlight.has(this.sk(token)) && !['SUCCEEDED', 'PENDING_REVIEW'].includes(t.status)) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能确认旧草案。', 409);
+      return this.#confirmCore(s, t, this.now(), { confirmed, code, newPin, pin });
     });
   }
   #verificationFailure(s, t, now, errorCode = 'INVALID_CODE') {
@@ -504,10 +532,13 @@ class BankService {
     audit(s, 'VERIFICATION_REJECTED', locked ? '连续三次验证失败，敏感操作锁定 5 分钟。' : '设备验证失败，操作未执行。', now, t?.id);
     return { error: { code: locked ? 'SAFETY_LOCKED' : errorCode, message: locked ? '连续三次验证失败，敏感操作锁定 5 分钟。' : '身份验证失败，未执行操作；请重新获取本次任务的验证。', status: 403 }, state: view(s, now) };
   }
-  #confirmCore(s, t, now, { confirmed, code, newPin }, authentication = 'demo_otp') {
+  #confirmCore(s, t, now, { confirmed, code, newPin, pin }, authentication = 'demo_otp') {
     if (['SUCCEEDED', 'PENDING_REVIEW'].includes(t.status)) return { task: publicTask(t, now), state: view(s, now), idempotent: true };
     this.check(s, t, now);
     if (confirmed !== true) fail('CONFIRMATION_REQUIRED', '必须明确确认这项操作。');
+    if (t.fraudCheck?.status === 'REQUIRED') fail('FRAUD_CHECK_REQUIRED', '这是给新收款人的大额转账，请先回答三个安全问题。', 409);
+    if (t.fraudCheck?.status === 'FLAGGED') fail('FRAUD_SUSPECTED', '这笔转账疑似诈骗，已交给人工处理，不能继续。', 409);
+    if (t.fraudCheck?.status === 'COOLING' && now < t.fraudCheck.coolingUntil) fail('COOLING_OFF', `冷静期还剩 ${Math.ceil((t.fraudCheck.coolingUntil - now) / 1000)} 秒，期间可以随时取消。`, 409);
     t.risk = level(s, t.action, now);
     if (t.risk === 'red') {
       if (s.passkeyCredential) {
@@ -520,6 +551,9 @@ class BankService {
     if (t.action.type === 'change_password') t.pendingPin = hashPin(newPin);
     if (t.action.type === 'transfer' && t.action.cents > available(s)) fail('INSUFFICIENT_FUNDS', '可用余额已变化，请重新发起任务。');
     if (t.action.type === 'transfer') this.checkReserve(s, t.action);
+    // Second factor for red operations once the user has set a trade PIN (something you know + the page code / device).
+    if (t.risk === 'red' && s.tradePin && t.action.type !== 'change_password' && !checkPin(s.tradePin, pin)) return this.#verificationFailure(s, t, now, 'PIN_INVALID');
+    if (t.fraudCheck) t.fraudCheck.status = 'PASSED';
     if (t.risk === 'red') s.authFailures = 0;
     delete t.challenge; delete t.passkeyPending;
     t.verificationMethod = t.risk === 'red' ? authentication : 'explicit_confirmation';
@@ -589,7 +623,7 @@ class BankService {
     });
   }
   async passkeyOptions(token, taskId) {
-    if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划，请稍后验证。', 409);
+    if (this.inFlight.has(this.sk(token))) fail('PLANNING_IN_PROGRESS', '新需求正在规划，请稍后验证。', 409);
     const issued = this.store.transact(db => {
       const s = this.session(db, token); const t = this.task(s, taskId); this.check(s, t, this.now());
       if (!s.passkeyCredential) fail('PASSKEY_NOT_REGISTERED', '此演示会话尚未注册 Passkey。', 409);
@@ -601,7 +635,7 @@ class BankService {
     const result = await this.passkey.authenticationOptions({ binding: issued.binding, credentials: [issued.credential] });
     return this.store.transact(db => {
       const s = this.session(db, token); const t = this.task(s, taskId); const now = this.now();
-      if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划，本次验证选项失效。', 409);
+      if (this.inFlight.has(this.sk(token))) fail('PLANNING_IN_PROGRESS', '新需求正在规划，本次验证选项失效。', 409);
       this.check(s, t, now);
       if (t.passkeyVersion !== issued.version || this.passkey.bindingHash(this.#binding(token, t)) !== result.pending.bindingHash ||
           s.passkeyCredential?.id !== issued.credential.id || s.passkeyCredential.publicKey !== issued.credential.publicKey) fail('PASSKEY_REQUEST_CHANGED', '任务或设备注册已经变化，本次选项失效。', 409);
@@ -611,10 +645,10 @@ class BankService {
       return { options: result.options, expiresAt: result.pending.expiresAt, task: publicTask(t, now), state: view(s, now) };
     });
   }
-  async passkeyConfirm(token, taskId, { response, confirmed, newPin } = {}) {
+  async passkeyConfirm(token, taskId, { response, confirmed, newPin, pin } = {}) {
     const snapshot = this.session(this.store.read(), token); const prior = this.task(snapshot, taskId);
     if (['SUCCEEDED', 'PENDING_REVIEW'].includes(prior.status)) return { task: publicTask(prior, this.now()), state: view(snapshot, this.now()), idempotent: true };
-    if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能确认旧草案。', 409);
+    if (this.inFlight.has(this.sk(token))) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能确认旧草案。', 409);
     this.check(snapshot, prior, this.now());
     if (confirmed !== true) fail('CONFIRMATION_REQUIRED', '必须明确确认这项操作。');
     if (!snapshot.passkeyCredential) fail('PASSKEY_NOT_REGISTERED', '此会话尚未注册设备。', 409);
@@ -635,7 +669,7 @@ class BankService {
     return this.store.transact(db => {
       const s = this.session(db, token); const t = this.task(s, taskId); const now = this.now();
       if (['SUCCEEDED', 'PENDING_REVIEW'].includes(t.status)) return { task: publicTask(t, now), state: view(s, now), idempotent: true };
-      if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，旧设备授权不能执行。', 409);
+      if (this.inFlight.has(this.sk(token))) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，旧设备授权不能执行。', 409);
       this.check(s, t, now);
       if (t.passkeyPending?.id !== proof.challengeId || t.passkeyPending.expiresAt <= now ||
           this.passkey.bindingHash(this.#binding(token, t)) !== proof.bindingHash || s.passkeyCredential?.id !== proof.credentialId ||
@@ -643,7 +677,7 @@ class BankService {
       // Consumption, counter update and business mutation share this one commit.
       delete t.passkeyPending; s.passkeyCredential.counter = proof.newCounter;
       s.passkeyCredential.deviceType = proof.deviceType; s.passkeyCredential.backedUp = proof.backedUp;
-      return this.#confirmCore(s, t, now, { confirmed: true, newPin }, 'passkey');
+      return this.#confirmCore(s, t, now, { confirmed: true, newPin, pin }, 'passkey');
     });
   }
   checkReserve(s, action, pendingTask) {
@@ -768,7 +802,7 @@ class BankService {
   // Human desk. A person can read the case, note, decide reversals, lift a risk lock, return work to the
   // user as a fresh draft, or close it. A person never confirms a payment for the user.
   handoffAction(token, caseId, { action, note, agent } = {}) {
-    if (this.inFlight.has(token)) fail('PLANNING_IN_PROGRESS', '新需求正在规划，请稍后处理。', 409);
+    if (this.inFlight.has(this.sk(token))) fail('PLANNING_IN_PROGRESS', '新需求正在规划，请稍后处理。', 409);
     // There is deliberately no 'confirm' or 'execute' here: a person cannot authorize money for the user.
     if (!['claim', 'note', 'approve_reversal', 'reject_reversal', 'unlock', 'return', 'close'].includes(action)) fail('INVALID_HANDOFF_ACTION', '未知的人工操作。');
     if (note !== undefined && (typeof note !== 'string' || note.length > 300 || hasPrivateData(note))) fail('INVALID_HANDOFF_NOTE', '备注最多 300 字，且不能包含真实账号或密钥。');
@@ -817,6 +851,40 @@ class BankService {
       return { handoff: structuredClone(c), results, state: view(s, now) };
     });
   }
+  // IM channels may confirm yellow tasks only. Red always needs the web page (Passkey / page code),
+  // so a stolen IM account alone can never move a large amount. Enforced here, not in the gateway.
+  confirmFromChannel(ref, taskId) {
+    return this.store.transact(db => {
+      const s = this.session(db, ref); const t = this.task(s, taskId); const now = this.now();
+      if (this.inFlight.has(this.sk(ref))) fail('PLANNING_IN_PROGRESS', '新需求正在规划中，不能确认旧草案。', 409);
+      if (t.status !== 'AWAITING_CONFIRMATION') fail('TASK_NOT_ACTIONABLE', '这项任务已结束、取消或被新操作取代。', 409);
+      if (level(s, t.action, now) === 'red') { audit(s, 'IM_CONFIRM_REJECTED', `${t.id}：红色操作必须在网页完成验证。`, now, t.id); fail('RED_REQUIRES_WEB', '这是红色操作，需要在 Orbit 网页完成验证。', 403); }
+      const out = this.#confirmCore(s, t, now, { confirmed: true });
+      audit(s, 'IM_CONFIRMED', `${t.id}：通过已绑定的 IM 身份确认（黄色）。`, now, t.id);
+      return out;
+    });
+  }
+  // 反诈问询: any "yes" stops the transfer and hands it to a person; all "no" starts the cooling-off period.
+  fraudAnswer(token, taskId, { answers } = {}) {
+    if (!Array.isArray(answers) || answers.length !== antiFraud.QUESTIONS.length || answers.some(a => typeof a !== 'boolean')) fail('INVALID_FRAUD_ANSWERS', '请逐题回答"是"或"否"。');
+    return this.store.transact(db => {
+      const s = this.session(db, token); const now = this.now(); const t = this.task(s, taskId);
+      if (t.status !== 'AWAITING_CONFIRMATION' || t.fraudCheck?.status !== 'REQUIRED') fail('FRAUD_CHECK_NOT_PENDING', '这项任务不需要或已完成安全问询。', 409);
+      t.fraudCheck.answers = answers; t.fraudCheck.answeredAt = now;
+      if (answers.some(Boolean)) {
+        t.fraudCheck.status = 'FLAGGED'; finishDraft(t, 'CANCELLED', now);
+        s.lockedUntil = Math.max(s.lockedUntil || 0, now + 30 * 60000); s.riskLock = { rule: 'FRAUD_SUSPECTED', text: '转账前安全问询提示可能是诈骗', at: now };
+        const c = handoffs.openCase(s, { kind: 'risk', sourceId: t.id, reason: '疑似电信诈骗：用户在转账前问询中回答了"是"', context: { title: t.title, answers } }, now, id);
+        audit(s, 'FRAUD_SUSPECTED', `${t.id}：问询命中，转账已取消，敏感操作暂停 30 分钟，转反诈人工 ${c.id}。`, now, t.id);
+        const text = `已为你停止这笔转账（工单 ${c.id}）。凡是让你转账到"安全账户"、索要验证码或指导你操作的，都是诈骗。反诈专员会联系你；如有损失请拨打 110 或 96110。`;
+        s.history.push({ role: 'assistant', text, at: now, id: id(), results: [], meta: { ...FRAUD_META } }); s.history = s.history.slice(-40);
+        return { task: publicTask(t, now), state: view(s, now), outcome: 'FLAGGED', text };
+      }
+      t.fraudCheck.status = 'COOLING'; t.fraudCheck.coolingUntil = now + antiFraud.COOLING_MS;
+      audit(s, 'FRAUD_CHECK_PASSED', `${t.id}：三题均为"否"，进入 ${antiFraud.COOLING_MS / 1000} 秒冷静期。`, now, t.id);
+      return { task: publicTask(t, now), state: view(s, now), outcome: 'COOLING', text: `好的。给新收款人的大额转账有 ${antiFraud.COOLING_MS / 1000} 秒冷静期，之后再完成验证即可。` };
+    });
+  }
   reconcile(token, taskId) {
     return this.store.transact(db => {
       const now = this.now(); const s = this.session(db, token); const t = this.task(s, taskId);
@@ -839,4 +907,4 @@ class BankService {
     });
   }
 }
-module.exports = { BankService, BankError, cents, daily, available };
+module.exports = { BankService, BankError, cents, daily, available, internalRef, tokenKey };

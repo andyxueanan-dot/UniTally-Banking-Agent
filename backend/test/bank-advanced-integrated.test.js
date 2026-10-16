@@ -7,7 +7,7 @@ function fixture() {
   let now = Date.parse('2026-09-26T10:00:00Z');
   const sent = [];
   const planner = { configured: true, model: 'test-double', plan: async text => { sent.push(text); return { actions: [{ type: 'transfer', recipient: '王明', amount: '200' }], question: '', meta: { mode: 'test', totalTokens: 0, latencyMs: 0 } }; } };
-  const store = createBankStore(); const service = new BankService({ store, planner, now: () => now, limits: { commandsPerMinute: 100 } }); const { token } = service.create();
+  const store = createBankStore(); const service = new BankService({ store, planner, now: () => now, limits: { commandsPerMinute: 100 }, antiFraud: false }); const { token } = service.create();
   return { service, store, token, sent, now: () => now, tick: ms => now += ms,
     state: () => service.get(token), task: () => service.get(token).tasks[0], manual: a => service.prepareManual(token, a),
     confirm() { const t = service.get(token).tasks[0]; const code = t.risk === 'red' ? service.challenge(token, t.id).demoCode : undefined; return service.confirm(token, t.id, { confirmed: true, code }); },

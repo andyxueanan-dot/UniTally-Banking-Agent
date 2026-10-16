@@ -63,7 +63,8 @@ import "./bank-agent-v3.css";
 // Orbit mark (concept A, eccentric O): one even-odd path on a 256 grid. Source: review-2026-10-09/orbit-icon.
 const ORBIT_MARK = 'M24 128 A104 104 0 1 0 232 128 A104 104 0 1 0 24 128 Z M76 118 A66 66 0 1 0 208 118 A66 66 0 1 0 76 118 Z';
 import BankServices, { type ManualAction } from "./bank/BankServices";
-import { ExtraResult, FlowList, HandoffDesk } from "./bank/AgentExtras";
+import { ExtraResult, FlowList, HandoffDesk, ScopeLine, followUps } from "./bank/AgentExtras";
+import ImChannel from "./bank/ImChannel";
 import PasskeyPanel from "./bank/PasskeyPanel";
 import { passkeyLocalUrl } from "@/lib/bankApi";
 import { connectionDetails } from '@/lib/bankConnection';
@@ -215,6 +216,7 @@ function TaskCard({
   auth,
   compact = false,
   reversals = [],
+  pinRequired = false,
 }: {
   task: BankTask;
   busy: boolean;
@@ -223,12 +225,18 @@ function TaskCard({
   auth?: BankState["auth"];
   compact?: boolean;
   reversals?: NonNullable<BankState["reversals"]>;
+  pinRequired?: boolean;
 }) {
   const [code, setCode] = useState("");
+  const [answers, setAnswers] = useState<(boolean | null)[]>([null, null, null]);
+  const [tradePin, setTradePin] = useState("");
   const [pin, setPin] = useState("");
   const [pin2, setPin2] = useState("");
   const pinStep = task.action.type === "change_password";
   const pinOk = !pinStep || (/^\d{6}$/.test(pin) && pin === pin2);
+  const needTradePin = pinRequired && task.risk === "red" && !pinStep;
+  const fraud = task.fraudCheck;
+  const fraudBlocking = fraud && (fraud.status === "REQUIRED" || (fraud.status === "COOLING" && (fraud.coolingUntil || 0) > now));
   const reversal = reversals.find((r) => r.originalTaskId === task.id);
   const [demoCode, setDemoCode] = useState("");
   const [codeExpires, setCodeExpires] = useState(0);
@@ -355,6 +363,27 @@ function TaskCard({
             <LockKeyhole size={15} />
             <span>确认只对上述具体操作生效。需求变更后，需要重新授权。</span>
           </div>
+          {fraud?.status === "REQUIRED" && (
+            <div className="v3-fraud">
+              <strong>转账前安全问询</strong>
+              <p>这是给新收款人的大额转账。银行工作人员不会让你转账到"安全账户"，也不会索要验证码。请如实回答：</p>
+              <ol>
+                {fraud.questions.map((q, i) => (
+                  <li key={i}>
+                    <span>{q}</span>
+                    <div role="group" aria-label={`第 ${i + 1} 题`}>
+                      <button type="button" aria-pressed={answers[i] === true} onClick={() => setAnswers(answers.map((a, j) => (j === i ? true : a)))}>是</button>
+                      <button type="button" aria-pressed={answers[i] === false} onClick={() => setAnswers(answers.map((a, j) => (j === i ? false : a)))}>否</button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <button className="ba-primary" disabled={busy || answers.some((a) => a === null)} onClick={() => onAction(task, "fraud-check", { answers })}>提交回答</button>
+            </div>
+          )}
+          {fraud?.status === "COOLING" && (fraud.coolingUntil || 0) > now && (
+            <p className="v3-cooling">冷静期还剩 {Math.ceil(((fraud.coolingUntil || 0) - now) / 1000)} 秒。这段时间可以随时取消；之后再完成验证。</p>
+          )}
           {task.risk === "red" && !deviceRequired && (
             <div className="ba-verification">
               <p>
@@ -427,6 +456,12 @@ function TaskCard({
             />
             我已核对以上操作详情，仅在沙箱中执行
           </label>
+          {needTradePin && (
+            <label className="v3-pin v3-pin-factor">
+              <span>交易密码（第二重验证）</span>
+              <input type="password" inputMode="numeric" autoComplete="off" maxLength={6} value={tradePin} onChange={(e) => setTradePin(e.target.value.replace(/\D/g, ""))} aria-label="输入 6 位交易密码" />
+            </label>
+          )}
           {pinStep && (
             <div className="v3-pin">
               <p>新交易密码只在这里输入，以加盐哈希保存，不会发给模型，也不会出现在对话或记录里。</p>
@@ -442,6 +477,8 @@ function TaskCard({
                 busy ||
                 !ack ||
                 !pinOk ||
+                Boolean(fraudBlocking) ||
+                (needTradePin && tradePin.length !== 6) ||
                 !deviceOriginValid ||
                 (task.risk === "red" &&
                   !deviceRequired &&
@@ -452,6 +489,7 @@ function TaskCard({
                   confirmed: true,
                   code,
                   ...(pinStep ? { newPin: pin } : {}),
+                  ...(needTradePin ? { pin: tradePin } : {}),
                 })
               }
             >
@@ -823,7 +861,9 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
       setBusy(false);
     }
   };
+  const lastSend = useRef<{ text: string; demo?: string } | null>(null);
   const send = async (text: string, demo?: string, simulateTimeout = false) => {
+    lastSend.current = { text, demo };
     if (!token || busy || !text.trim()) return;
     setBusy(true);
     setError("");
@@ -870,7 +910,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
         const result = await bankRequest<BankResponse>(
           `/tasks/${task.id}/passkey/confirm`,
           token,
-          { response, confirmed: true, ...("newPin" in body ? { newPin: (body as { newPin?: string }).newPin } : {}) },
+          { response, confirmed: true, ...("newPin" in body ? { newPin: (body as { newPin?: string }).newPin } : {}), ...("pin" in body ? { pin: (body as { pin?: string }).pin } : {}) },
         );
         applyState(result.state);
         if (mobile && result.task?.status === 'SUCCEEDED') setTaskFilter('done');
@@ -1177,6 +1217,12 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     const previous = mobileHistory.current.pop() || 'overview';
     currentTab.current = previous; setTab(previous); window.scrollTo({ top: 0, behavior: 'instant' });
   }, [modal, transferOpen]);
+  // Red operations from the IM channel link here (#task=<id>, no credential in the link): open 待办.
+  useEffect(() => {
+    if (!mobile || !/^#task=[0-9a-f]{8,40}$/.test(window.location.hash)) return;
+    setTaskFilter('active'); go('audit');
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, [mobile, go]);
   useEffect(() => {
     if (!mobile) return;
     const nativeBack = (event: Event) => {
@@ -1197,7 +1243,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
     : "本月";
   return (
     <div className={`ba-root v2 v3 ${mobile ? `bm-app bm-tab-${tab}` : ''}`}>
-      {mobile && <header className="bm-header"><div>{['bills', 'cards', 'services', 'desk'].includes(tab) ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : null}{!['bills', 'cards', 'services', 'desk'].includes(tab) && <svg className="v3-mark" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d={ORBIT_MARK} /></svg>}<strong>{({overview:'Orbit 演示银行',assistant:'智能助手',audit:'待办事项',profile:'个人中心',bills:'交易明细',cards:'卡片管理',services:'服务中心',desk:'人工客服工作台'})[tab]}</strong></div><span>演示</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
+      {mobile && <header className="bm-header"><div>{['bills', 'cards', 'services', 'desk', 'im'].includes(tab) ? <button aria-label="返回上一页" onClick={back}><ChevronLeft size={23} /></button> : null}{!['bills', 'cards', 'services', 'desk', 'im'].includes(tab) && <svg className="v3-mark" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d={ORBIT_MARK} /></svg>}<strong>{({overview:'Orbit 演示银行',assistant:'智能助手',audit:'待办事项',profile:'个人中心',bills:'交易明细',cards:'卡片管理',services:'服务中心',desk:'人工客服工作台',im:'IM 渠道'})[tab]}</strong></div><span>演示</span><button aria-label="手机刷新状态" onClick={refresh} disabled={busy || loading}><RefreshCw size={18} /></button></header>}
       <aside className="ba-sidebar">
         <a className="ba-logo" href="/bank-agent" aria-label="Orbit 首页">
           <span className="ba-logo-mark">
@@ -1323,6 +1369,9 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
             <div className="ba-error" role="alert" ref={errorBox}>
               <AlertTriangle size={18} />
               <span>{error}</span>
+              {lastSend.current && tab === "assistant" && (
+                <button className="v3-retry" disabled={busy} onClick={() => { const l = lastSend.current; if (l) void send(l.text, l.demo); }}>重试</button>
+              )}
               <button aria-label="关闭提示" onClick={() => setError("")}>
                 <X size={17} />
               </button>
@@ -1427,7 +1476,8 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                       {!connection.native && <details className="ba-settings-disclosure"><summary>设备验证与安全设置</summary><PasskeyPanel auth={state.auth} busy={busy} onRegister={registerDevice} /></details>}
                     </>
                   )}
-                  {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">O</div><h2>个人中心</h2><p>演示账户 · 虚构数据，不关联真实银行卡。</p><dl className="v3-account"><dt>账户类型</dt><dd>{state.accountPolicy?.label || "Ⅰ类演示账户"}</dd><dt>身份验证</dt><dd>{state.auth?.mode === "passkey" ? "已绑定设备 Passkey" : "页面内演示验证码"}</dd><dt>绑定卡片</dt><dd>{state.cards.length} 张</dd><dt>常用联系人</dt><dd>{state.contacts.length} 人</dd><dt>交易密码</dt><dd>{state.tradePinSet ? "已设置" : "未设置"}</dd></dl><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={() => go('desk')}><Headset size={19}/>人工客服工作台（演示）{(state.handoffs || []).some(c => ['OPEN', 'CLAIMED'].includes(c.status)) && <b className="v3-count">{(state.handoffs || []).filter(c => ['OPEN', 'CLAIMED'].includes(c.status)).length}</b>}<ChevronRight size={17}/></button><button disabled={busy} onClick={() => { void prepareManual({ type: 'change_password' }); }}><KeyRound size={19}/>{state.tradePinSet ? '修改' : '设置'}交易密码<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
+                  {mobile && tab === 'profile' && <section className="ba-panel bm-profile-panel"><div className="bm-profile-avatar">O</div><h2>个人中心</h2><p>演示账户 · 虚构数据，不关联真实银行卡。</p><dl className="v3-account"><dt>账户类型</dt><dd>{state.accountPolicy?.label || "Ⅰ类演示账户"}</dd><dt>身份验证</dt><dd>{state.auth?.mode === "passkey" ? "已绑定设备 Passkey" : "页面内演示验证码"}</dd><dt>绑定卡片</dt><dd>{state.cards.length} 张</dd><dt>常用联系人</dt><dd>{state.contacts.length} 人</dd><dt>交易密码</dt><dd>{state.tradePinSet ? "已设置" : "未设置"}</dd></dl><div className="bm-profile-status"><strong>{connection.native ? '手机安装版' : '手机网页预览'}</strong><span>{mode === 'ai' ? '已选择 AI 规划' : '离线案例 · 不调用 AI'}</span><small>{connection.message}</small></div><button onClick={() => {setTaskFilter('all');go('audit');}}><History size={19}/>全部任务与回执<ChevronRight size={17}/></button><button onClick={() => go('im')}><MessageSquareText size={19}/>IM 渠道（飞书）<ChevronRight size={17}/></button><button onClick={() => go('desk')}><Headset size={19}/>人工客服工作台（演示）{(state.handoffs || []).some(c => ['OPEN', 'CLAIMED'].includes(c.status)) && <b className="v3-count">{(state.handoffs || []).filter(c => ['OPEN', 'CLAIMED'].includes(c.status)).length}</b>}<ChevronRight size={17}/></button><button disabled={busy} onClick={() => { void prepareManual({ type: 'change_password' }); }}><KeyRound size={19}/>{state.tradePinSet ? '修改' : '设置'}交易密码<ChevronRight size={17}/></button><button onClick={exportAudit}><Download size={19}/>导出模拟操作记录<ChevronRight size={17}/></button><button onClick={e=>openModal('guide',e.currentTarget)}><CircleHelp size={19}/>功能与演示边界<ChevronRight size={17}/></button><button disabled={busy} onClick={e=>openModal('reset',e.currentTarget)}><Plus size={19}/>新建演示账户<ChevronRight size={17}/></button>{connection.native && <p className="ba-service-warning">手机容器的 Passkey 适配尚未验证。已绑定设备的账户不能降级到演示码；请勿在 App 中注册或迁移真实凭据。</p>}</section>}
+                  {mobile && tab === 'im' && token && <ImChannel token={token} onChanged={() => { void refresh(); }} onOpenTasks={() => { setTaskFilter('active'); go('audit'); }} />}
                   {mobile && tab === 'desk' && <HandoffDesk handoffs={state.handoffs || []} reversals={state.reversals || []} busy={busy} onAction={deskAction} />}
                   {mobile && tab === 'profile' && <details className="ba-settings-disclosure"><summary>模型纠错记录 · {state.feedbackCount || 0} 条</summary><div className="ba-panel"><p>记录只用于人工审核，不自动加入提示词。导出后先脱敏，不要直接公开。</p><button className="ba-secondary" disabled={busy} onClick={exportFeedback}>导出待审核纠错</button></div></details>}
                   {!mobile && tab === "overview" && (
@@ -1743,7 +1793,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                   {tab === "audit" && (
                     <>
                       {state.riskLock && (
-                        <p className="v3-risk-banner" role="alert">检测到异常行为（{state.riskLock.text}），转账等敏感操作暂停到 {new Date(state.lockedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}，已转人工复核；查询不受影响。</p>
+                        <p className="v3-risk-banner" role="alert">检测到异常行为（{state.riskLock.text}），转账等敏感操作暂停到 {new Date(state.lockedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}，已转人工复核；查询不受影响。 <button className="ba-link-button" onClick={() => go("desk")}>查看处理进度</button></p>
                       )}
                       <FlowList workflows={state.workflows || []} busy={busy} onControl={controlWorkflow} />
                       <section className="ba-panel">
@@ -1807,6 +1857,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                                 auth={state.auth}
                                 compact
                                 reversals={state.reversals}
+                                pinRequired={state.tradePinSet}
                               />
                             ))}
                           {!tasks.length && (
@@ -1920,7 +1971,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           {m.role === "user"
                             ? "你"
                             : m.meta?.mode === "ai"
-                              ? "助手 · AI 规划"
+                              ? "助手 · AI 生成"
                               : m.meta?.mode === "manual"
                                 ? "助手 · 表单操作"
                                 : m.meta?.mode === "rule"
@@ -1937,6 +1988,12 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           {m.results?.map((r, i) => (
                             <AnalysisResult key={i} result={r} />
                           ))}
+                          {m.role === "assistant" && m.results?.[0] && <ScopeLine result={m.results[0]} at={m.at} />}
+                          {m.role === "assistant" && m.id === state.history.at(-1)?.id && followUps(m.results).length > 0 && (
+                            <div className="v3-followups" aria-label="接着可以问">
+                              {followUps(m.results).map((f) => <button key={f.text} disabled={busy} onClick={() => send(f.text, f.demo)}>{f.text}</button>)}
+                            </div>
+                          )}
                           {m.role === 'assistant' && m.meta?.mode === 'ai' && <PlannerFeedback busy={busy} onSave={correction => saveFeedback(m.id, correction)} />}
                           {m.meta && (
                             <details className="ba-message-source"><summary>{m.meta.mode === 'ai' ? 'AI 规划 · 后台核验' : m.meta.mode === 'manual' ? '表单操作 · 非 AI' : m.meta.mode === 'rule' ? '规则解析 · 非 AI' : '固定案例 · 非 AI'}</summary><small>
@@ -2016,8 +2073,11 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                     </select>
                       <small className="v2-composer-note">
                         <LockKeyhole size={12} />
-                        只输入虚构信息，不填真实账号
+                        只输入虚构信息
                       </small>
+                      <button type="button" className="v3-human" disabled={busy} onClick={() => { void prepareManual({ type: "request_handoff", reason: "用户点了「找人工」" }); }}>
+                        <Headset size={14} />找人工
+                      </button>
                       <button
                         aria-label="发送需求"
                         type="submit"
@@ -2060,6 +2120,7 @@ export default function BankAgent({ mobile = false }: { mobile?: boolean }) {
                           onAction={act}
                           auth={state.auth}
                           compact
+                          pinRequired={state.tradePinSet}
                         />
                       ))}
                       {!tasks.length && (

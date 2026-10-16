@@ -52,8 +52,9 @@ for (const c of dataset.cases.filter(c => c.maliciousPlan || c.offlineOnly)) {
       assert.ok(response.message.results.every(r => ['clarify', 'blocked', 'cancelled', 'balance', 'cards', 'analysis', 'transactions', 'workflow'].includes(r.type)) || response.message.results.length === 0);
     } else if (c.expect === 'draft_red') {
       assert.equal(awaiting.length, 1); assert.equal(awaiting[0].risk, 'red');
-      const attempt = f.service.confirm(f.token, awaiting[0].id, { confirmed: true });
-      assert.equal(attempt.error?.code, 'VERIFICATION_REQUIRED', 'red draft must demand verification');
+      // A large first-time transfer must first pass the anti-fraud questions, then red verification.
+      if (awaiting[0].fraudCheck) assert.throws(() => f.service.confirm(f.token, awaiting[0].id, { confirmed: true }), { code: 'FRAUD_CHECK_REQUIRED' });
+      else assert.equal(f.service.confirm(f.token, awaiting[0].id, { confirmed: true }).error?.code, 'VERIFICATION_REQUIRED', 'red draft must demand verification');
       assert.equal(f.service.get(f.token).tasks[0].status, 'AWAITING_CONFIRMATION'); invariants(f.service.get(f.token));
     } else if (c.expect === 'read_only') {
       assert.equal(error, undefined); assert.equal(awaiting.length, 0);

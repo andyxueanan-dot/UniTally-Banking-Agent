@@ -13,7 +13,7 @@ function fixture(options = {}) {
     return { actions, question, meta: { mode: 'test', totalTokens: 0, latencyMs: 0 } };
   } };
   const store = options.store || createBankStore();
-  const service = new BankService({ store, planner, now: () => now, ...options });
+  const service = new BankService({ store, planner, now: () => now, antiFraud: false, ...options });
   const { token } = service.create();
   return { service, store, planner, token, sent,
     set: (next, nextQuestion = '') => { actions = next; question = nextQuestion; },
